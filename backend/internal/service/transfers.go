@@ -1,0 +1,133 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"mime"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/eterealink/eterealink/backend/internal/domain"
+	"github.com/eterealink/eterealink/backend/internal/storage"
+)
+
+var (
+	ErrInvalidName = errors.New("file name is required")
+	ErrInvalidSize = errors.New("file size is outside the allowed range")
+)
+
+type TransferStore interface {
+	CreateAnonymousUpload(ctx context.Context, file domain.File, share domain.ShareLink) error
+	CompleteUpload(ctx context.Context, fileID string, now time.Time) (domain.File, error)
+	ResolveFileShare(ctx context.Context, code string, now time.Time) (domain.SharedFile, error)
+}
+
+type Clock func() time.Time
+
+type Transfers struct {
+	store        TransferStore
+	signer       storage.Signer
+	now          Clock
+	anonymousTTL time.Duration
+	signedURLTTL time.Duration
+	maxFileBytes int64
+}
+
+type CreateAnonymousUploadInput struct {
+	OriginalName string `json:"originalName"`
+	MIMEType     string `json:"mimeType"`
+	SizeBytes    int64  `json:"sizeBytes"`
+}
+
+type CreateAnonymousUploadResult struct {
+	File         domain.File          `json:"file"`
+	Share        domain.ShareLink     `json:"share"`
+	SharePath    string               `json:"sharePath"`
+	UploadTarget storage.UploadTarget `json:"uploadTarget"`
+}
+
+type ResolveShareResult struct {
+	File           domain.File            `json:"file"`
+	Share          domain.ShareLink       `json:"share"`
+	DownloadTarget storage.DownloadTarget `json:"downloadTarget"`
+}
+
+func NewTransfers(store TransferStore, signer storage.Signer, now Clock, anonymousTTL, signedURLTTL time.Duration, maxFileBytes int64) *Transfers {
+	return &Transfers{
+		store: store, signer: signer, now: now,
+		anonymousTTL: anonymousTTL, signedURLTTL: signedURLTTL, maxFileBytes: maxFileBytes,
+	}
+}
+
+func (s *Transfers) CreateAnonymousUpload(ctx context.Context, input CreateAnonymousUploadInput) (CreateAnonymousUploadResult, error) {
+	input.OriginalName = filepath.Base(strings.TrimSpace(input.OriginalName))
+	if input.OriginalName == "" || input.OriginalName == "." {
+		return CreateAnonymousUploadResult{}, ErrInvalidName
+	}
+	if input.SizeBytes <= 0 || input.SizeBytes > s.maxFileBytes {
+		return CreateAnonymousUploadResult{}, ErrInvalidSize
+	}
+	if strings.TrimSpace(input.MIMEType) == "" {
+		input.MIMEType = mime.TypeByExtension(filepath.Ext(input.OriginalName))
+		if input.MIMEType == "" {
+			input.MIMEType = "application/octet-stream"
+		}
+	}
+
+	fileID, err := newUUID()
+	if err != nil {
+		return CreateAnonymousUploadResult{}, err
+	}
+	shareID, err := newUUID()
+	if err != nil {
+		return CreateAnonymousUploadResult{}, err
+	}
+	shortCode, err := newShortCode()
+	if err != nil {
+		return CreateAnonymousUploadResult{}, err
+	}
+
+	now := s.now().UTC()
+	expiresAt := now.Add(s.anonymousTTL)
+	storageKey := fmt.Sprintf("anonymous/%s", fileID)
+	file := domain.File{
+		ID: fileID, StorageKey: storageKey, OriginalName: input.OriginalName,
+		MIMEType: input.MIMEType, SizeBytes: input.SizeBytes,
+		Status: domain.FileStatusPending, CreatedAt: now, ExpiresAt: &expiresAt,
+	}
+	share := domain.ShareLink{
+		ID: shareID, ShortCode: shortCode, FileID: &file.ID,
+		CreatedAt: now, ExpiresAt: &expiresAt,
+	}
+
+	uploadTarget, err := s.signer.SignUpload(ctx, storageKey, input.MIMEType, now.Add(s.signedURLTTL))
+	if err != nil {
+		return CreateAnonymousUploadResult{}, fmt.Errorf("sign upload: %w", err)
+	}
+	if err := s.store.CreateAnonymousUpload(ctx, file, share); err != nil {
+		return CreateAnonymousUploadResult{}, fmt.Errorf("create upload metadata: %w", err)
+	}
+
+	return CreateAnonymousUploadResult{
+		File: file, Share: share, SharePath: "/s/" + shortCode, UploadTarget: uploadTarget,
+	}, nil
+}
+
+func (s *Transfers) CompleteUpload(ctx context.Context, fileID string) (domain.File, error) {
+	return s.store.CompleteUpload(ctx, fileID, s.now().UTC())
+}
+
+func (s *Transfers) ResolveShare(ctx context.Context, code string) (ResolveShareResult, error) {
+	shared, err := s.store.ResolveFileShare(ctx, code, s.now().UTC())
+	if err != nil {
+		return ResolveShareResult{}, err
+	}
+
+	target, err := s.signer.SignDownload(ctx, shared.File.StorageKey, shared.File.OriginalName, s.now().UTC().Add(s.signedURLTTL))
+	if err != nil {
+		return ResolveShareResult{}, fmt.Errorf("sign download: %w", err)
+	}
+	return ResolveShareResult{File: shared.File, Share: shared.Share, DownloadTarget: target}, nil
+}

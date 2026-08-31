@@ -1,0 +1,19 @@
+.DS_Store
+.env
+*.local
+Eterealink_Design_Document.md
+
+# Go
+backend/bin/
+backend/coverage.out
+
+# Frontend (added in a later phase)
+frontend/node_modules/
+frontend/.next/
+
+# Terraform
+infrastructure/.terraform/
+infrastructure/*.tfstate
+infrastructure/*.tfstate.*
+infrastructure/*.tfvars
+!infrastructure/*.tfvars.example

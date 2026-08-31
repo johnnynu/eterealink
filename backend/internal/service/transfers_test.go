@@ -1,0 +1,158 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/eterealink/eterealink/backend/internal/domain"
+	"github.com/eterealink/eterealink/backend/internal/storage"
+)
+
+func TestCreateAnonymousUpload(t *testing.T) {
+	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
+	store := newMemoryStore()
+	transfers := NewTransfers(store, fakeSigner{}, func() time.Time { return now }, 24*time.Hour, 15*time.Minute, 100*1024*1024)
+
+	result, err := transfers.CreateAnonymousUpload(context.Background(), CreateAnonymousUploadInput{
+		OriginalName: "../vacation/photo.png",
+		SizeBytes:    2048,
+	})
+	if err != nil {
+		t.Fatalf("CreateAnonymousUpload() error = %v", err)
+	}
+
+	if result.File.OriginalName != "photo.png" {
+		t.Fatalf("OriginalName = %q, want photo.png", result.File.OriginalName)
+	}
+	if result.File.MIMEType != "image/png" {
+		t.Fatalf("MIMEType = %q, want image/png", result.File.MIMEType)
+	}
+	if result.File.Status != domain.FileStatusPending {
+		t.Fatalf("Status = %q, want PENDING", result.File.Status)
+	}
+	if result.File.ExpiresAt == nil || !result.File.ExpiresAt.Equal(now.Add(24*time.Hour)) {
+		t.Fatalf("ExpiresAt = %v, want %v", result.File.ExpiresAt, now.Add(24*time.Hour))
+	}
+	if len(result.Share.ShortCode) != 12 {
+		t.Fatalf("short code length = %d, want 12", len(result.Share.ShortCode))
+	}
+	if result.SharePath != "/s/"+result.Share.ShortCode {
+		t.Fatalf("SharePath = %q", result.SharePath)
+	}
+	if result.UploadTarget.Method != "PUT" {
+		t.Fatalf("upload method = %q, want PUT", result.UploadTarget.Method)
+	}
+	if len(store.files) != 1 || len(store.shares) != 1 {
+		t.Fatalf("metadata not persisted atomically")
+	}
+}
+
+func TestCreateAnonymousUploadRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name  string
+		input CreateAnonymousUploadInput
+		want  error
+	}{
+		{name: "empty name", input: CreateAnonymousUploadInput{SizeBytes: 1}, want: ErrInvalidName},
+		{name: "zero bytes", input: CreateAnonymousUploadInput{OriginalName: "file.txt"}, want: ErrInvalidSize},
+		{name: "too large", input: CreateAnonymousUploadInput{OriginalName: "file.txt", SizeBytes: 11}, want: ErrInvalidSize},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transfers := NewTransfers(newMemoryStore(), fakeSigner{}, time.Now, 24*time.Hour, 15*time.Minute, 10)
+			_, err := transfers.CreateAnonymousUpload(context.Background(), test.input)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestShareRequiresCompletedUploadAndHonorsExpiration(t *testing.T) {
+	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
+	store := newMemoryStore()
+	transfers := NewTransfers(store, fakeSigner{}, func() time.Time { return now }, 24*time.Hour, 15*time.Minute, 100)
+
+	created, err := transfers.CreateAnonymousUpload(context.Background(), CreateAnonymousUploadInput{OriginalName: "notes.txt", SizeBytes: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transfers.ResolveShare(context.Background(), created.Share.ShortCode); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("resolve pending error = %v, want conflict", err)
+	}
+	if _, err := transfers.CompleteUpload(context.Background(), created.File.ID); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := transfers.ResolveShare(context.Background(), created.Share.ShortCode)
+	if err != nil {
+		t.Fatalf("resolve ready share: %v", err)
+	}
+	if resolved.DownloadTarget.URL == "" {
+		t.Fatal("download URL is empty")
+	}
+
+	transfers.now = func() time.Time { return now.Add(24 * time.Hour) }
+	if _, err := transfers.ResolveShare(context.Background(), created.Share.ShortCode); !errors.Is(err, domain.ErrExpired) {
+		t.Fatalf("resolve expired error = %v, want expired", err)
+	}
+}
+
+type fakeSigner struct{}
+
+func (fakeSigner) SignUpload(_ context.Context, key, _ string, expiresAt time.Time) (storage.UploadTarget, error) {
+	return storage.UploadTarget{URL: "https://upload.invalid/" + key, Method: "PUT", ExpiresAt: expiresAt}, nil
+}
+
+func (fakeSigner) SignDownload(_ context.Context, key, _ string, expiresAt time.Time) (storage.DownloadTarget, error) {
+	return storage.DownloadTarget{URL: "https://download.invalid/" + key, ExpiresAt: expiresAt}, nil
+}
+
+type memoryStore struct {
+	files  map[string]domain.File
+	shares map[string]domain.ShareLink
+}
+
+func newMemoryStore() *memoryStore {
+	return &memoryStore{files: make(map[string]domain.File), shares: make(map[string]domain.ShareLink)}
+}
+
+func (s *memoryStore) CreateAnonymousUpload(_ context.Context, file domain.File, share domain.ShareLink) error {
+	s.files[file.ID] = file
+	s.shares[share.ShortCode] = share
+	return nil
+}
+
+func (s *memoryStore) CompleteUpload(_ context.Context, fileID string, now time.Time) (domain.File, error) {
+	file, exists := s.files[fileID]
+	if !exists {
+		return domain.File{}, domain.ErrNotFound
+	}
+	if file.ExpiresAt != nil && !file.ExpiresAt.After(now) {
+		return domain.File{}, domain.ErrNotFound
+	}
+	file.Status = domain.FileStatusReady
+	file.CompletedAt = &now
+	s.files[fileID] = file
+	return file, nil
+}
+
+func (s *memoryStore) ResolveFileShare(_ context.Context, code string, now time.Time) (domain.SharedFile, error) {
+	share, exists := s.shares[code]
+	if !exists || share.FileID == nil {
+		return domain.SharedFile{}, domain.ErrNotFound
+	}
+	if share.RevokedAt != nil {
+		return domain.SharedFile{}, domain.ErrRevoked
+	}
+	if share.ExpiresAt != nil && !share.ExpiresAt.After(now) {
+		return domain.SharedFile{}, domain.ErrExpired
+	}
+	file := s.files[*share.FileID]
+	if file.Status != domain.FileStatusReady {
+		return domain.SharedFile{}, domain.ErrConflict
+	}
+	return domain.SharedFile{Share: share, File: file}, nil
+}
