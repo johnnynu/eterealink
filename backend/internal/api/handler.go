@@ -80,12 +80,17 @@ func (h *Handler) completeUpload(w http.ResponseWriter, r *http.Request) {
 
 	file, err := h.transfers.CompleteUpload(r.Context(), fileID)
 	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
 			writeError(w, http.StatusNotFound, "not_found", "upload was not found")
-			return
+		case errors.Is(err, service.ErrUploadObjectMissing):
+			writeError(w, http.StatusConflict, "upload_missing", "uploaded object was not found")
+		case errors.Is(err, service.ErrUploadObjectMismatch):
+			writeError(w, http.StatusConflict, "upload_mismatch", "uploaded object does not match declared metadata")
+		default:
+			h.logger.Error("complete upload failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to complete upload")
 		}
-		h.logger.Error("complete upload failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal_error", "unable to complete upload")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"file": file})

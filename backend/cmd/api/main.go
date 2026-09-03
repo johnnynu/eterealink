@@ -39,8 +39,16 @@ func run(logger *slog.Logger) error {
 	}
 	defer db.Close()
 
-	signer := storage.DevelopmentSigner{BaseURL: cfg.PublicAPIURL}
-	transfers := service.NewTransfers(db, signer, time.Now, cfg.AnonymousFileTTL, cfg.SignedURLTTL, cfg.MaxAnonymousFileBytes)
+	var storageBackend storage.Backend = storage.DevelopmentSigner{BaseURL: cfg.PublicAPIURL}
+	if cfg.StorageBackend == "gcs" {
+		gcsBackend, err := storage.NewGCSBackend(startupContext, cfg.GCSBucket, cfg.GCSSigningAccount)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = gcsBackend.Close() }()
+		storageBackend = gcsBackend
+	}
+	transfers := service.NewTransfers(db, storageBackend, time.Now, cfg.AnonymousFileTTL, cfg.SignedURLTTL, cfg.MaxAnonymousFileBytes)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

@@ -6,7 +6,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phase 1—the local backend foundation—is complete.
+Phases 1 and 2—the local backend foundation and direct Cloud Storage transfer layer—are complete.
 
 Implemented:
 
@@ -17,9 +17,13 @@ Implemented:
 - Random, non-sequential short share codes
 - Share expiration and revocation validation
 - Configurable file-size and signed-URL lifetime limits
-- Unit tests for core transfer rules and HTTP health behavior
+- V4-signed Cloud Storage upload and download URLs using keyless IAM signing
+- Stored-object size and media-type verification before uploads become `READY`
+- Create-only upload preconditions that prevent a signed URL from overwriting an object
+- Restricted localhost CORS configuration for browser transfers
+- Unit tests plus a live signed upload/download integration test
 
-The storage interface currently uses an intentionally non-functional development signer. Phase 2 will replace it with Google Cloud Storage V4 signed URLs and verify uploaded objects before marking transfers ready.
+Phase 3 is next: complete the anonymous browser upload-to-share experience and enforce the 24-hour lifecycle throughout the product flow.
 
 ## Product goals
 
@@ -56,7 +60,7 @@ The storage interface currently uses an intentionally non-functional development
       v
  +---------------+
  |  Custom VPC   |
- | Regional subnet|
+ | Regional subnet |
  +-------+-------+
          |
  Private service path
@@ -112,7 +116,7 @@ An anonymous transfer follows this path:
 
 ### Prerequisites
 
-- Go 1.24 or newer
+- Go 1.25 or newer
 - PostgreSQL 17, or Docker with Compose
 
 ### Run the API
@@ -144,12 +148,14 @@ Run the test suite with:
 make test
 ```
 
+To use the real GCS backend locally, follow the [Phase 2 GCP setup guide](./docs/setup/gcp-phase2-gcs.md). The default `development` backend remains available for metadata-only work and unit tests.
+
 ## Delivery roadmap
 
 | Phase | Outcome |
 |---|---|
-| 1. Local backend | PostgreSQL-backed anonymous transfer metadata and lifecycle |
-| 2. File transfer | Real direct uploads/downloads through Cloud Storage signed URLs |
+| 1. Local backend ✅ | PostgreSQL-backed anonymous transfer metadata and lifecycle |
+| 2. File transfer ✅ | Real direct uploads/downloads through Cloud Storage signed URLs |
 | 3. Anonymous sharing | Complete no-account upload-to-share experience with 24-hour expiry |
 | 4. Authentication | Firebase Google Sign-In and verified API identity |
 | 5. Folders | Persistent user files and OWNER/VIEWER folder sharing |
@@ -164,7 +170,7 @@ The product MVP is reached after the preview phase. The cloud portfolio mileston
 - Buckets remain private; access is issued through short-lived signed URLs.
 - Firebase tokens establish identity, while the API and PostgreSQL enforce authorization.
 - PostgreSQL will use private Cloud SQL connectivity rather than a public database endpoint.
-- Dedicated service accounts and Secret Manager will be configured with least privilege.
+- A dedicated signing service account has bucket-scoped object access; Secret Manager will be added when application secrets are introduced.
 - Cloud Run scales to zero, and always-on load balancers, NAT gateways, and Kubernetes are excluded unless a real requirement justifies them.
 - Anonymous transfers have file-size limits, abuse controls, and automated expiration.
 

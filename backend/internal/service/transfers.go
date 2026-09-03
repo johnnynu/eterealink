@@ -14,12 +14,15 @@ import (
 )
 
 var (
-	ErrInvalidName = errors.New("file name is required")
-	ErrInvalidSize = errors.New("file size is outside the allowed range")
+	ErrInvalidName          = errors.New("file name is required")
+	ErrInvalidSize          = errors.New("file size is outside the allowed range")
+	ErrUploadObjectMissing  = errors.New("uploaded object was not found")
+	ErrUploadObjectMismatch = errors.New("uploaded object does not match declared metadata")
 )
 
 type TransferStore interface {
 	CreateAnonymousUpload(ctx context.Context, file domain.File, share domain.ShareLink) error
+	GetUpload(ctx context.Context, fileID string, now time.Time) (domain.File, error)
 	CompleteUpload(ctx context.Context, fileID string, now time.Time) (domain.File, error)
 	ResolveFileShare(ctx context.Context, code string, now time.Time) (domain.SharedFile, error)
 }
@@ -28,7 +31,7 @@ type Clock func() time.Time
 
 type Transfers struct {
 	store        TransferStore
-	signer       storage.Signer
+	storage      storage.Backend
 	now          Clock
 	anonymousTTL time.Duration
 	signedURLTTL time.Duration
@@ -54,9 +57,9 @@ type ResolveShareResult struct {
 	DownloadTarget storage.DownloadTarget `json:"downloadTarget"`
 }
 
-func NewTransfers(store TransferStore, signer storage.Signer, now Clock, anonymousTTL, signedURLTTL time.Duration, maxFileBytes int64) *Transfers {
+func NewTransfers(store TransferStore, storageBackend storage.Backend, now Clock, anonymousTTL, signedURLTTL time.Duration, maxFileBytes int64) *Transfers {
 	return &Transfers{
-		store: store, signer: signer, now: now,
+		store: store, storage: storageBackend, now: now,
 		anonymousTTL: anonymousTTL, signedURLTTL: signedURLTTL, maxFileBytes: maxFileBytes,
 	}
 }
@@ -102,7 +105,7 @@ func (s *Transfers) CreateAnonymousUpload(ctx context.Context, input CreateAnony
 		CreatedAt: now, ExpiresAt: &expiresAt,
 	}
 
-	uploadTarget, err := s.signer.SignUpload(ctx, storageKey, input.MIMEType, now.Add(s.signedURLTTL))
+	uploadTarget, err := s.storage.SignUpload(ctx, storageKey, input.MIMEType, now.Add(s.signedURLTTL))
 	if err != nil {
 		return CreateAnonymousUploadResult{}, fmt.Errorf("sign upload: %w", err)
 	}
@@ -116,7 +119,24 @@ func (s *Transfers) CreateAnonymousUpload(ctx context.Context, input CreateAnony
 }
 
 func (s *Transfers) CompleteUpload(ctx context.Context, fileID string) (domain.File, error) {
-	return s.store.CompleteUpload(ctx, fileID, s.now().UTC())
+	now := s.now().UTC()
+	file, err := s.store.GetUpload(ctx, fileID, now)
+	if err != nil {
+		return domain.File{}, err
+	}
+
+	attributes, err := s.storage.StatObject(ctx, file.StorageKey)
+	if errors.Is(err, storage.ErrObjectNotFound) {
+		return domain.File{}, ErrUploadObjectMissing
+	}
+	if err != nil {
+		return domain.File{}, fmt.Errorf("inspect uploaded object: %w", err)
+	}
+	if attributes.SizeBytes != file.SizeBytes || normalizedMediaType(attributes.MIMEType) != normalizedMediaType(file.MIMEType) {
+		return domain.File{}, ErrUploadObjectMismatch
+	}
+
+	return s.store.CompleteUpload(ctx, fileID, now)
 }
 
 func (s *Transfers) ResolveShare(ctx context.Context, code string) (ResolveShareResult, error) {
@@ -125,9 +145,17 @@ func (s *Transfers) ResolveShare(ctx context.Context, code string) (ResolveShare
 		return ResolveShareResult{}, err
 	}
 
-	target, err := s.signer.SignDownload(ctx, shared.File.StorageKey, shared.File.OriginalName, s.now().UTC().Add(s.signedURLTTL))
+	target, err := s.storage.SignDownload(ctx, shared.File.StorageKey, shared.File.OriginalName, s.now().UTC().Add(s.signedURLTTL))
 	if err != nil {
 		return ResolveShareResult{}, fmt.Errorf("sign download: %w", err)
 	}
 	return ResolveShareResult{File: shared.File, Share: shared.Share, DownloadTarget: target}, nil
+}
+
+func normalizedMediaType(value string) string {
+	parsed, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+	return strings.ToLower(parsed)
 }

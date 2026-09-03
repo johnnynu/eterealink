@@ -2,10 +2,17 @@ package storage
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/url"
 	"path"
 	"strings"
 	"time"
+)
+
+var (
+	ErrObjectNotFound = errors.New("storage object not found")
+	ErrUnavailable    = errors.New("object storage is unavailable")
 )
 
 type UploadTarget struct {
@@ -20,9 +27,19 @@ type DownloadTarget struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+type ObjectAttributes struct {
+	SizeBytes int64
+	MIMEType  string
+}
+
 type Signer interface {
 	SignUpload(ctx context.Context, storageKey, mimeType string, expiresAt time.Time) (UploadTarget, error)
 	SignDownload(ctx context.Context, storageKey, originalName string, expiresAt time.Time) (DownloadTarget, error)
+}
+
+type Backend interface {
+	Signer
+	StatObject(ctx context.Context, storageKey string) (ObjectAttributes, error)
 }
 
 // DevelopmentSigner preserves the production signed-URL contract while the GCS
@@ -43,6 +60,10 @@ func (s DevelopmentSigner) SignUpload(_ context.Context, storageKey, mimeType st
 
 func (s DevelopmentSigner) SignDownload(_ context.Context, storageKey, _ string, expiresAt time.Time) (DownloadTarget, error) {
 	return DownloadTarget{URL: join(s.BaseURL, "_development/storage/download", storageKey), ExpiresAt: expiresAt}, nil
+}
+
+func (DevelopmentSigner) StatObject(_ context.Context, storageKey string) (ObjectAttributes, error) {
+	return ObjectAttributes{}, fmt.Errorf("%w: cannot inspect %q with the development signer", ErrUnavailable, storageKey)
 }
 
 func join(baseURL, suffix, storageKey string) string {

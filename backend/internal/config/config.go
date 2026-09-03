@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,9 @@ type Config struct {
 	HTTPAddr              string
 	DatabaseURL           string
 	PublicAPIURL          string
+	StorageBackend        string
+	GCSBucket             string
+	GCSSigningAccount     string
 	AnonymousFileTTL      time.Duration
 	SignedURLTTL          time.Duration
 	MaxAnonymousFileBytes int64
@@ -33,11 +37,24 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	storageBackend := strings.ToLower(value("STORAGE_BACKEND", "development"))
+	if storageBackend != "development" && storageBackend != "gcs" {
+		return Config{}, fmt.Errorf("STORAGE_BACKEND must be development or gcs")
+	}
+	gcsBucket := value("GCS_BUCKET", "")
+	gcsSigningAccount := value("GCS_SIGNING_SERVICE_ACCOUNT", "")
+	if storageBackend == "gcs" && (gcsBucket == "" || gcsSigningAccount == "") {
+		return Config{}, fmt.Errorf("GCS_BUCKET and GCS_SIGNING_SERVICE_ACCOUNT are required when STORAGE_BACKEND=gcs")
+	}
+
 	return Config{
 		Environment:           value("APP_ENV", "development"),
 		HTTPAddr:              value("HTTP_ADDR", ":8080"),
 		DatabaseURL:           value("DATABASE_URL", "postgres://eterealink:eterealink@localhost:5432/eterealink?sslmode=disable"),
 		PublicAPIURL:          value("PUBLIC_API_URL", "http://localhost:8080"),
+		StorageBackend:        storageBackend,
+		GCSBucket:             gcsBucket,
+		GCSSigningAccount:     gcsSigningAccount,
 		AnonymousFileTTL:      anonymousTTL,
 		SignedURLTTL:          signedURLTTL,
 		MaxAnonymousFileBytes: maxFileBytes,

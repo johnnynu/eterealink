@@ -83,6 +83,27 @@ func (p *Postgres) CreateAnonymousUpload(ctx context.Context, file domain.File, 
 	return nil
 }
 
+func (p *Postgres) GetUpload(ctx context.Context, fileID string, now time.Time) (domain.File, error) {
+	row := p.pool.QueryRow(ctx, `
+		SELECT id, owner_id, folder_id, storage_key, original_name, mime_type,
+		       size_bytes, upload_status, created_at, completed_at, expires_at
+		FROM files
+		WHERE id = $1
+		  AND upload_status IN ('PENDING', 'READY')
+		  AND (expires_at IS NULL OR expires_at > $2)`,
+		fileID, now,
+	)
+
+	file, err := scanFile(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.File{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.File{}, fmt.Errorf("get upload: %w", err)
+	}
+	return file, nil
+}
+
 func (p *Postgres) CompleteUpload(ctx context.Context, fileID string, now time.Time) (domain.File, error) {
 	row := p.pool.QueryRow(ctx, `
 		UPDATE files

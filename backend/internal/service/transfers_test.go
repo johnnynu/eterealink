@@ -13,7 +13,7 @@ import (
 func TestCreateAnonymousUpload(t *testing.T) {
 	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 	store := newMemoryStore()
-	transfers := NewTransfers(store, fakeSigner{}, func() time.Time { return now }, 24*time.Hour, 15*time.Minute, 100*1024*1024)
+	transfers := NewTransfers(store, fakeBackend{}, func() time.Time { return now }, 24*time.Hour, 15*time.Minute, 100*1024*1024)
 
 	result, err := transfers.CreateAnonymousUpload(context.Background(), CreateAnonymousUploadInput{
 		OriginalName: "../vacation/photo.png",
@@ -62,7 +62,7 @@ func TestCreateAnonymousUploadRejectsInvalidInput(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			transfers := NewTransfers(newMemoryStore(), fakeSigner{}, time.Now, 24*time.Hour, 15*time.Minute, 10)
+			transfers := NewTransfers(newMemoryStore(), fakeBackend{}, time.Now, 24*time.Hour, 15*time.Minute, 10)
 			_, err := transfers.CreateAnonymousUpload(context.Background(), test.input)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("error = %v, want %v", err, test.want)
@@ -74,7 +74,7 @@ func TestCreateAnonymousUploadRejectsInvalidInput(t *testing.T) {
 func TestShareRequiresCompletedUploadAndHonorsExpiration(t *testing.T) {
 	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
 	store := newMemoryStore()
-	transfers := NewTransfers(store, fakeSigner{}, func() time.Time { return now }, 24*time.Hour, 15*time.Minute, 100)
+	transfers := NewTransfers(store, fakeBackend{attributes: storage.ObjectAttributes{SizeBytes: 5, MIMEType: "text/plain; charset=utf-8"}}, func() time.Time { return now }, 24*time.Hour, 15*time.Minute, 100)
 
 	created, err := transfers.CreateAnonymousUpload(context.Background(), CreateAnonymousUploadInput{OriginalName: "notes.txt", SizeBytes: 5})
 	if err != nil {
@@ -100,14 +100,54 @@ func TestShareRequiresCompletedUploadAndHonorsExpiration(t *testing.T) {
 	}
 }
 
-type fakeSigner struct{}
+func TestCompleteUploadVerifiesStoredObject(t *testing.T) {
+	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
 
-func (fakeSigner) SignUpload(_ context.Context, key, _ string, expiresAt time.Time) (storage.UploadTarget, error) {
+	tests := []struct {
+		name    string
+		backend fakeBackend
+		want    error
+	}{
+		{name: "missing object", backend: fakeBackend{statErr: storage.ErrObjectNotFound}, want: ErrUploadObjectMissing},
+		{name: "wrong size", backend: fakeBackend{attributes: storage.ObjectAttributes{SizeBytes: 4, MIMEType: "text/plain"}}, want: ErrUploadObjectMismatch},
+		{name: "wrong content type", backend: fakeBackend{attributes: storage.ObjectAttributes{SizeBytes: 5, MIMEType: "image/png"}}, want: ErrUploadObjectMismatch},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newMemoryStore()
+			transfers := NewTransfers(store, test.backend, func() time.Time { return now }, 24*time.Hour, 15*time.Minute, 100)
+			created, err := transfers.CreateAnonymousUpload(context.Background(), CreateAnonymousUploadInput{
+				OriginalName: "notes.txt", MIMEType: "text/plain", SizeBytes: 5,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := transfers.CompleteUpload(context.Background(), created.File.ID); !errors.Is(err, test.want) {
+				t.Fatalf("CompleteUpload() error = %v, want %v", err, test.want)
+			}
+			if store.files[created.File.ID].Status != domain.FileStatusPending {
+				t.Fatal("file became ready after failed object verification")
+			}
+		})
+	}
+}
+
+type fakeBackend struct {
+	attributes storage.ObjectAttributes
+	statErr    error
+}
+
+func (fakeBackend) SignUpload(_ context.Context, key, _ string, expiresAt time.Time) (storage.UploadTarget, error) {
 	return storage.UploadTarget{URL: "https://upload.invalid/" + key, Method: "PUT", ExpiresAt: expiresAt}, nil
 }
 
-func (fakeSigner) SignDownload(_ context.Context, key, _ string, expiresAt time.Time) (storage.DownloadTarget, error) {
+func (fakeBackend) SignDownload(_ context.Context, key, _ string, expiresAt time.Time) (storage.DownloadTarget, error) {
 	return storage.DownloadTarget{URL: "https://download.invalid/" + key, ExpiresAt: expiresAt}, nil
+}
+
+func (b fakeBackend) StatObject(_ context.Context, _ string) (storage.ObjectAttributes, error) {
+	return b.attributes, b.statErr
 }
 
 type memoryStore struct {
@@ -123,6 +163,14 @@ func (s *memoryStore) CreateAnonymousUpload(_ context.Context, file domain.File,
 	s.files[file.ID] = file
 	s.shares[share.ShortCode] = share
 	return nil
+}
+
+func (s *memoryStore) GetUpload(_ context.Context, fileID string, now time.Time) (domain.File, error) {
+	file, exists := s.files[fileID]
+	if !exists || (file.ExpiresAt != nil && !file.ExpiresAt.After(now)) {
+		return domain.File{}, domain.ErrNotFound
+	}
+	return file, nil
 }
 
 func (s *memoryStore) CompleteUpload(_ context.Context, fileID string, now time.Time) (domain.File, error) {
