@@ -23,14 +23,25 @@ export function AuthMenu() {
 
   const initial = (user.displayName || user.email).charAt(0).toLocaleUpperCase();
   return (
-    <span className="auth-control signed-in">
-      <span className="user-avatar" aria-hidden="true">{initial}</span>
-      <span className="user-summary">
-        <strong>{user.displayName}</strong>
-        <span>{user.email}</span>
-      </span>
-      <button className="sign-out-button" type="button" onClick={signOut} disabled={busy}>Sign out</button>
-      {error && <span className="auth-error" role="alert">{error}</span>}
-    </span>
+    <details className="auth-control account-menu">
+      <summary aria-label={`Open account menu for ${user.displayName || user.email}`}>
+        <span className="user-avatar" aria-hidden="true">{initial}</span>
+        <span className="user-summary">
+          <strong>{user.displayName || user.email}</strong>
+          <span>Account</span>
+        </span>
+        <span className="account-chevron" aria-hidden="true">⌄</span>
+      </summary>
+      <div className="account-popover">
+        <div className="account-identity">
+          <strong>{user.displayName || user.email}</strong>
+          <span>{user.email}</span>
+        </div>
+        <button className="sign-out-button" type="button" onClick={signOut} disabled={busy}>
+          {busy ? "Signing out…" : "Sign out"}
+        </button>
+        {error && <span className="auth-error" role="alert">{error}</span>}
+      </div>
+    </details>
   );
 }

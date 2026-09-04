@@ -1,0 +1,56 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AppDashboard } from "./app-dashboard";
+
+const replace = vi.hoisted(() => vi.fn());
+const authState = vi.hoisted(() => ({
+  configured: true,
+  loading: false,
+  user: null as null | { id: string; email: string; displayName: string; createdAt: string },
+}));
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
+vi.mock("@/components/auth-context", () => ({ useAuth: () => authState }));
+
+const mounted: Array<{ container: HTMLDivElement; unmount: () => void }> = [];
+
+afterEach(() => {
+  for (const view of mounted.splice(0)) {
+    act(() => view.unmount());
+    view.container.remove();
+  }
+  authState.user = null;
+  vi.clearAllMocks();
+});
+
+function renderDashboard() {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  mounted.push({ container, unmount: () => root.unmount() });
+  act(() => root.render(<AppDashboard />));
+  return container;
+}
+
+describe("AppDashboard", () => {
+  it("shows a useful workspace for an authenticated user", () => {
+    authState.user = {
+      id: "user-1",
+      email: "person@example.com",
+      displayName: "Person Example",
+      createdAt: "2026-09-03T00:00:00Z",
+    };
+    const container = renderDashboard();
+    expect(container.textContent).toContain("Welcome back, Person.");
+    expect(container.textContent).toContain("Your files");
+    expect(container.textContent).toContain("Shared with you");
+    expect(container.textContent).toContain("Create a link");
+    expect(container.querySelector("#workspace-files")).not.toBeNull();
+  });
+
+  it("returns a signed-out visitor to the public page", () => {
+    renderDashboard();
+    expect(replace).toHaveBeenCalledWith("/");
+  });
+});

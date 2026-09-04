@@ -38,7 +38,7 @@ function validateFiles(files: File[]): string {
   return "";
 }
 
-export function UploadWorkspace() {
+export function UploadWorkspace({ variant = "anonymous" }: { variant?: "anonymous" | "workspace" }) {
   const abortersRef = useRef<Array<() => void>>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [state, setState] = useState<UploadState>("idle");
@@ -191,8 +191,8 @@ export function UploadWorkspace() {
     <section className="upload-card" aria-labelledby="upload-title">
       <div className="card-heading">
         <div>
-          <p className="eyebrow">Anonymous transfer</p>
-          <h2 id="upload-title">Send files</h2>
+          <p className="eyebrow">{variant === "workspace" ? "Temporary transfer" : "Anonymous transfer"}</p>
+          <h2 id="upload-title">{variant === "workspace" ? "Create a link" : "Send files"}</h2>
         </div>
         <span className="secure-pill"><span /> Private transfer</span>
       </div>
@@ -208,7 +208,7 @@ export function UploadWorkspace() {
           <div className="upload-icon"><UploadIcon /></div>
           <p className="drop-title">Drop your files here</p>
           <p className="drop-subtitle">or choose up to {MAX_FILES} from your device</p>
-          <label className="secondary-button file-picker-label" htmlFor="anonymous-files">Choose files</label>
+          <label className="secondary-button file-picker-label" htmlFor={`${variant}-files`}>Choose files</label>
           <p className="limit-copy">Up to {formatBytes(MAX_TRANSFER_BYTES)} total · Link expires in 24 hours</p>
         </div>
       ) : (
@@ -251,14 +251,14 @@ export function UploadWorkspace() {
                 <button className="primary-button" type="button" onClick={startUpload} disabled={state === "error"}>
                   <UploadIcon /> Create 24-hour link
                 </button>
-                <label className="text-button file-picker-label" htmlFor="anonymous-files">Choose different files</label>
+                <label className="text-button file-picker-label" htmlFor={`${variant}-files`}>Choose different files</label>
               </>
             )}
           </div>
         </div>
       )}
 
-      <input id="anonymous-files" className="visually-hidden" type="file" multiple onChange={onInputChange} />
+      <input id={`${variant}-files`} className="visually-hidden" type="file" multiple onChange={onInputChange} />
     </section>
   );
 }
