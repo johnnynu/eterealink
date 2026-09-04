@@ -49,10 +49,20 @@ func run(logger *slog.Logger) error {
 		storageBackend = gcsBackend
 	}
 	transfers := service.NewTransfers(db, storageBackend, time.Now, cfg.AnonymousFileTTL, cfg.SignedURLTTL, cfg.MaxAnonymousFileBytes)
+	bundles := service.NewBundles(
+		db, storageBackend, time.Now, cfg.AnonymousFileTTL, cfg.SignedURLTTL,
+		cfg.MaxAnonymousFileBytes, cfg.MaxAnonymousTransferBytes, cfg.MaxAnonymousFiles,
+	)
+	workerContext, stopWorker := context.WithCancel(context.Background())
+	defer stopWorker()
+	if cfg.StorageBackend == "gcs" {
+		archiveWorker := service.NewArchiveWorker(db, storageBackend, time.Now, logger)
+		go archiveWorker.Run(workerContext, 2*time.Second)
+	}
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewHandler(transfers, db, logger),
+		Handler:           api.NewHandler(transfers, bundles, db, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

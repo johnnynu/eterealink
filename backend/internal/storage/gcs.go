@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -71,6 +72,29 @@ func (b *GCSBackend) SignUpload(ctx context.Context, storageKey, mimeType string
 	}, nil
 }
 
+func (b *GCSBackend) SignResumableUpload(ctx context.Context, storageKey, mimeType string, expiresAt time.Time) (UploadTarget, error) {
+	const generationPrecondition = "x-goog-if-generation-match:0"
+	signedURL, err := b.signedURL(ctx, storageKey, &cloudstorage.SignedURLOptions{
+		Scheme:  cloudstorage.SigningSchemeV4,
+		Method:  http.MethodPost,
+		Expires: expiresAt,
+		Headers: []string{"Content-Type:" + mimeType, "x-goog-resumable:start", generationPrecondition},
+	})
+	if err != nil {
+		return UploadTarget{}, err
+	}
+	return UploadTarget{
+		URL:    signedURL,
+		Method: http.MethodPost,
+		Headers: map[string]string{
+			"Content-Type":               mimeType,
+			"X-Goog-Resumable":           "start",
+			"X-Goog-If-Generation-Match": "0",
+		},
+		ExpiresAt: expiresAt,
+	}, nil
+}
+
 func (b *GCSBackend) SignDownload(ctx context.Context, storageKey, originalName string, expiresAt time.Time) (DownloadTarget, error) {
 	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": originalName})
 	signedURL, err := b.signedURL(ctx, storageKey, &cloudstorage.SignedURLOptions{
@@ -96,6 +120,32 @@ func (b *GCSBackend) StatObject(ctx context.Context, storageKey string) (ObjectA
 		return ObjectAttributes{}, fmt.Errorf("read gs://%s/%s attributes: %w", b.bucketName, storageKey, err)
 	}
 	return ObjectAttributes{SizeBytes: attributes.Size, MIMEType: attributes.ContentType}, nil
+}
+
+func (b *GCSBackend) ReadObject(ctx context.Context, storageKey string) (io.ReadCloser, error) {
+	reader, err := b.client.Bucket(b.bucketName).Object(storageKey).NewReader(ctx)
+	if errors.Is(err, cloudstorage.ErrObjectNotExist) {
+		return nil, ErrObjectNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open gs://%s/%s: %w", b.bucketName, storageKey, err)
+	}
+	return reader, nil
+}
+
+func (b *GCSBackend) WriteObject(ctx context.Context, storageKey, mimeType string, write func(io.Writer) error) (ObjectAttributes, error) {
+	object := b.client.Bucket(b.bucketName).Object(storageKey).If(cloudstorage.Conditions{DoesNotExist: true})
+	writer := object.NewWriter(ctx)
+	writer.ContentType = mimeType
+	writer.ChunkSize = 16 * 1024 * 1024
+	if err := write(writer); err != nil {
+		_ = writer.CloseWithError(err)
+		return ObjectAttributes{}, err
+	}
+	if err := writer.Close(); err != nil {
+		return ObjectAttributes{}, fmt.Errorf("close gs://%s/%s: %w", b.bucketName, storageKey, err)
+	}
+	return b.StatObject(ctx, storageKey)
 }
 
 func (b *GCSBackend) signedURL(ctx context.Context, storageKey string, options *cloudstorage.SignedURLOptions) (string, error) {

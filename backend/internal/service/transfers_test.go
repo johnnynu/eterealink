@@ -100,6 +100,42 @@ func TestShareRequiresCompletedUploadAndHonorsExpiration(t *testing.T) {
 	}
 }
 
+func TestShareDownloadURLDoesNotOutliveAnonymousTransfer(t *testing.T) {
+	createdAt := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
+	now := createdAt
+	store := newMemoryStore()
+	transfers := NewTransfers(
+		store,
+		fakeBackend{attributes: storage.ObjectAttributes{SizeBytes: 5, MIMEType: "text/plain"}},
+		func() time.Time { return now },
+		24*time.Hour,
+		15*time.Minute,
+		100,
+	)
+
+	created, err := transfers.CreateAnonymousUpload(context.Background(), CreateAnonymousUploadInput{
+		OriginalName: "notes.txt", MIMEType: "text/plain", SizeBytes: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transfers.CompleteUpload(context.Background(), created.File.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	now = createdAt.Add(23*time.Hour + 59*time.Minute)
+	resolved, err := transfers.ResolveShare(context.Background(), created.Share.ShortCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Share.ExpiresAt == nil {
+		t.Fatal("anonymous share has no expiration")
+	}
+	if !resolved.DownloadTarget.ExpiresAt.Equal(*created.Share.ExpiresAt) {
+		t.Fatalf("download expires at %v, want transfer expiration %v", resolved.DownloadTarget.ExpiresAt, *created.Share.ExpiresAt)
+	}
+}
+
 func TestCompleteUploadVerifiesStoredObject(t *testing.T) {
 	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
 
@@ -140,6 +176,10 @@ type fakeBackend struct {
 
 func (fakeBackend) SignUpload(_ context.Context, key, _ string, expiresAt time.Time) (storage.UploadTarget, error) {
 	return storage.UploadTarget{URL: "https://upload.invalid/" + key, Method: "PUT", ExpiresAt: expiresAt}, nil
+}
+
+func (fakeBackend) SignResumableUpload(_ context.Context, key, _ string, expiresAt time.Time) (storage.UploadTarget, error) {
+	return storage.UploadTarget{URL: "https://upload.invalid/" + key, Method: "POST", ExpiresAt: expiresAt}, nil
 }
 
 func (fakeBackend) SignDownload(_ context.Context, key, _ string, expiresAt time.Time) (storage.DownloadTarget, error) {

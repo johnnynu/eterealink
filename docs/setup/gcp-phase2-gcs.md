@@ -45,7 +45,7 @@ The remaining values are documented in the repository's `.env.example`.
 
 ## Browser CORS policy
 
-The checked-in [`config/gcs-cors.json`](../../config/gcs-cors.json) allows direct `PUT`, `GET`, and `HEAD` requests from:
+The checked-in [`config/gcs-cors.json`](../../config/gcs-cors.json) allows direct resumable `POST`/`PUT` uploads plus `GET` and `HEAD` requests from:
 
 - `http://localhost:3000`
 - `http://127.0.0.1:3000`

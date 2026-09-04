@@ -15,7 +15,7 @@ func TestHealthAndReadiness(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	t.Run("health does not depend on database", func(t *testing.T) {
-		handler := NewHandler(nil, readiness{err: errors.New("offline")}, logger)
+		handler := NewHandler(nil, nil, readiness{err: errors.New("offline")}, logger)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 		if response.Code != http.StatusOK {
@@ -24,7 +24,7 @@ func TestHealthAndReadiness(t *testing.T) {
 	})
 
 	t.Run("readiness reflects database", func(t *testing.T) {
-		handler := NewHandler(nil, readiness{err: errors.New("offline")}, logger)
+		handler := NewHandler(nil, nil, readiness{err: errors.New("offline")}, logger)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 		if response.Code != http.StatusServiceUnavailable {
@@ -35,7 +35,7 @@ func TestHealthAndReadiness(t *testing.T) {
 
 func TestInvalidUploadJSON(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	handler := NewHandler(nil, readiness{}, logger)
+	handler := NewHandler(nil, nil, readiness{}, logger)
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/uploads", strings.NewReader(`{"originalName":"x","surprise":true}`))
 	handler.ServeHTTP(response, request)

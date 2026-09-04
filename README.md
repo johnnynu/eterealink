@@ -6,28 +6,35 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 and 2—the local backend foundation and direct Cloud Storage transfer layer—are complete.
+Phases 1 through 3—the local backend foundation, direct Cloud Storage transfer layer, and anonymous sharing experience—are complete.
 
 Implemented:
 
 - Go REST API with structured logging and graceful shutdown
 - PostgreSQL schema and reversible migration runner
-- Atomic creation of anonymous file and share metadata
-- Explicit `PENDING` to `READY` upload lifecycle
+- Atomic creation of anonymous transfer, file, and share metadata
+- Explicit per-file and whole-transfer `PENDING` to `READY` lifecycle
 - Random, non-sequential short share codes
 - Share expiration and revocation validation
-- Configurable file-size and signed-URL lifetime limits
-- V4-signed Cloud Storage upload and download URLs using keyless IAM signing
+- Configurable per-file, combined-transfer, file-count, and signed-URL lifetime limits
+- V4-signed resumable Cloud Storage uploads and signed downloads using keyless IAM signing
 - Stored-object size and media-type verification before uploads become `READY`
 - Create-only upload preconditions that prevent a signed URL from overwriting an object
 - Restricted localhost CORS configuration for browser transfers
 - Unit tests plus a live signed upload/download integration test
+- Responsive Next.js multi-file upload experience with drag-and-drop and combined progress
+- Same-origin API proxy plus direct-to-Cloud-Storage browser upload flow
+- Copyable short-link success state with exact expiration details
+- One share link for up to 10 files and 1 GiB total per anonymous transfer
+- Streaming background ZIP generation with individual-file download fallback
+- Recipient share page with ZIP readiness polling, authorized downloads, live time remaining, and distinct expired/revoked/missing states
+- Frontend lint, unit-test, and production-build checks
 
-Phase 3 is next: complete the anonymous browser upload-to-share experience and enforce the 24-hour lifecycle throughout the product flow.
+The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
 
 ## Product goals
 
-- Let anonymous users upload a file and receive a 24-hour share link without registering.
+- Let anonymous users upload one or more files and receive a 24-hour share link without registering.
 - Transfer file bytes directly between browsers and object storage rather than proxying them through the API.
 - Provide short, human-shareable URLs without exposing internal IDs.
 - Support previews for common images, documents, video, audio, and text.
@@ -93,14 +100,14 @@ The API owns identity, authorization, metadata, and signed-URL generation. Cloud
 
 An anonymous transfer follows this path:
 
-1. The browser requests an upload from the Go API.
-2. The API creates temporary file and share metadata in PostgreSQL.
-3. The API returns a short-lived signed Cloud Storage upload URL.
-4. The browser uploads the file directly to Cloud Storage.
-5. The browser tells the API that the transfer completed.
-6. The API verifies the stored object and marks the file ready.
-7. Recipients resolve the short code and receive authorized preview/download metadata.
-8. The file, share, and object expire after 24 hours.
+1. The browser sends metadata for up to 10 files, totaling no more than 1 GiB, to the Go API.
+2. The API atomically creates temporary transfer, file, and share metadata in PostgreSQL.
+3. The API returns one short-lived signed resumable-upload target per file.
+4. The browser uploads up to three files concurrently and resumes interrupted chunks when possible.
+5. The browser confirms each file; the API verifies its stored size and media type.
+6. When every file is ready, a background worker streams the objects into a ZIP stored in the existing bucket.
+7. Recipients resolve one short code and can download the ZIP when ready or any file individually.
+8. The transfer and share stop resolving after 24 hours. Physical object deletion remains part of the lifecycle-cleanup phase.
 
 ## Current API
 
@@ -110,13 +117,16 @@ An anonymous transfer follows this path:
 | `GET` | `/readyz` | Database-aware readiness |
 | `POST` | `/v1/uploads` | Create anonymous file/share metadata and an upload target |
 | `POST` | `/v1/uploads/{id}/complete` | Mark a successful direct upload ready |
-| `GET` | `/v1/shares/{code}` | Resolve a usable share and a short-lived download target |
+| `POST` | `/v1/transfers` | Create one anonymous multi-file transfer and resumable targets |
+| `POST` | `/v1/transfers/{transferID}/files/{fileID}/complete` | Verify and complete one transfer file |
+| `GET` | `/v1/shares/{code}` | Resolve a usable single-file or multi-file share and short-lived download targets |
 
 ## Local development
 
 ### Prerequisites
 
 - Go 1.25 or newer
+- Node.js 24 or newer and npm
 - PostgreSQL 17, or Docker with Compose
 
 ### Run the API
@@ -135,7 +145,16 @@ An anonymous transfer follows this path:
    make run
    ```
 
-4. Check the service endpoints:
+4. In another terminal, install and run the frontend:
+
+   ```bash
+   make frontend-install
+   make frontend-run
+   ```
+
+   The web application is available at `http://localhost:3000`. It proxies API control-plane requests to `http://localhost:8080` by default. Override this with `API_BASE_URL` in `frontend/.env.local` when needed.
+
+5. Check the service endpoints:
 
    ```text
    http://localhost:8080/healthz
@@ -148,7 +167,7 @@ Run the test suite with:
 make test
 ```
 
-To use the real GCS backend locally, follow the [Phase 2 GCP setup guide](./docs/setup/gcp-phase2-gcs.md). The default `development` backend remains available for metadata-only work and unit tests.
+To complete a browser upload, use the real GCS backend by following the [Phase 2 GCP setup guide](./docs/setup/gcp-phase2-gcs.md). Multi-file uploads and ZIP output use that same bucket; no second bucket is required. In local development the API process runs the archive worker. It can be separated into a Cloud Run Job when the application is deployed. The default `development` backend remains available for metadata-only work and unit tests, but intentionally cannot accept file bytes.
 
 ## Delivery roadmap
 
@@ -156,7 +175,7 @@ To use the real GCS backend locally, follow the [Phase 2 GCP setup guide](./docs
 |---|---|
 | 1. Local backend ✅ | PostgreSQL-backed anonymous transfer metadata and lifecycle |
 | 2. File transfer ✅ | Real direct uploads/downloads through Cloud Storage signed URLs |
-| 3. Anonymous sharing | Complete no-account upload-to-share experience with 24-hour expiry |
+| 3. Anonymous sharing ✅ | No-account upload-to-share experience with enforced 24-hour expiry |
 | 4. Authentication | Firebase Google Sign-In and verified API identity |
 | 5. Folders | Persistent user files and OWNER/VIEWER folder sharing |
 | 6. Previews | Browser previews with a safe generic fallback |
@@ -172,6 +191,6 @@ The product MVP is reached after the preview phase. The cloud portfolio mileston
 - PostgreSQL will use private Cloud SQL connectivity rather than a public database endpoint.
 - A dedicated signing service account has bucket-scoped object access; Secret Manager will be added when application secrets are introduced.
 - Cloud Run scales to zero, and always-on load balancers, NAT gateways, and Kubernetes are excluded unless a real requirement justifies them.
-- Anonymous transfers have file-size limits, abuse controls, and automated expiration.
+- Anonymous transfers have file-size and file-count limits plus server-enforced access expiration. Rate limiting and physical object cleanup remain part of the operations phase.
 
 Architecture decisions are recorded under [`docs/architecture`](./docs/architecture/).

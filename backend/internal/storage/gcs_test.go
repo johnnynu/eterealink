@@ -38,6 +38,21 @@ func TestGCSBackendSignsV4Targets(t *testing.T) {
 		t.Fatalf("signed headers = %q, want generation precondition", parsedUpload.Query().Get("X-Goog-SignedHeaders"))
 	}
 
+	resumable, err := backend.SignResumableUpload(context.Background(), "anonymous/transfer/file-id", "text/plain", expiresAt)
+	if err != nil {
+		t.Fatalf("SignResumableUpload() error = %v", err)
+	}
+	if resumable.Method != http.MethodPost || resumable.Headers["X-Goog-Resumable"] != "start" {
+		t.Fatalf("resumable target = %#v", resumable)
+	}
+	parsedResumable, _ := url.Parse(resumable.URL)
+	signedHeaders := parsedResumable.Query().Get("X-Goog-SignedHeaders")
+	for _, header := range []string{"content-type", "x-goog-if-generation-match", "x-goog-resumable"} {
+		if !strings.Contains(signedHeaders, header) {
+			t.Fatalf("signed headers = %q, want %s", signedHeaders, header)
+		}
+	}
+
 	download, err := backend.SignDownload(context.Background(), "anonymous/file-id", "project notes.txt", expiresAt)
 	if err != nil {
 		t.Fatalf("SignDownload() error = %v", err)

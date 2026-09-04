@@ -5,9 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"mime"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/eterealink/eterealink/backend/internal/domain"
 	"github.com/eterealink/eterealink/backend/internal/storage"
@@ -31,7 +32,7 @@ type Clock func() time.Time
 
 type Transfers struct {
 	store        TransferStore
-	storage      storage.Backend
+	storage      storage.TransferBackend
 	now          Clock
 	anonymousTTL time.Duration
 	signedURLTTL time.Duration
@@ -57,7 +58,7 @@ type ResolveShareResult struct {
 	DownloadTarget storage.DownloadTarget `json:"downloadTarget"`
 }
 
-func NewTransfers(store TransferStore, storageBackend storage.Backend, now Clock, anonymousTTL, signedURLTTL time.Duration, maxFileBytes int64) *Transfers {
+func NewTransfers(store TransferStore, storageBackend storage.TransferBackend, now Clock, anonymousTTL, signedURLTTL time.Duration, maxFileBytes int64) *Transfers {
 	return &Transfers{
 		store: store, storage: storageBackend, now: now,
 		anonymousTTL: anonymousTTL, signedURLTTL: signedURLTTL, maxFileBytes: maxFileBytes,
@@ -65,15 +66,15 @@ func NewTransfers(store TransferStore, storageBackend storage.Backend, now Clock
 }
 
 func (s *Transfers) CreateAnonymousUpload(ctx context.Context, input CreateAnonymousUploadInput) (CreateAnonymousUploadResult, error) {
-	input.OriginalName = filepath.Base(strings.TrimSpace(input.OriginalName))
-	if input.OriginalName == "" || input.OriginalName == "." {
+	input.OriginalName = safeOriginalName(input.OriginalName)
+	if input.OriginalName == "" {
 		return CreateAnonymousUploadResult{}, ErrInvalidName
 	}
 	if input.SizeBytes <= 0 || input.SizeBytes > s.maxFileBytes {
 		return CreateAnonymousUploadResult{}, ErrInvalidSize
 	}
 	if strings.TrimSpace(input.MIMEType) == "" {
-		input.MIMEType = mime.TypeByExtension(filepath.Ext(input.OriginalName))
+		input.MIMEType = mime.TypeByExtension(path.Ext(input.OriginalName))
 		if input.MIMEType == "" {
 			input.MIMEType = "application/octet-stream"
 		}
@@ -118,6 +119,14 @@ func (s *Transfers) CreateAnonymousUpload(ctx context.Context, input CreateAnony
 	}, nil
 }
 
+func safeOriginalName(value string) string {
+	name := path.Base(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/"))
+	if name == "" || name == "." || name == "/" || strings.ContainsRune(name, 0) || utf8.RuneCountInString(name) > 1024 {
+		return ""
+	}
+	return name
+}
+
 func (s *Transfers) CompleteUpload(ctx context.Context, fileID string) (domain.File, error) {
 	now := s.now().UTC()
 	file, err := s.store.GetUpload(ctx, fileID, now)
@@ -140,12 +149,21 @@ func (s *Transfers) CompleteUpload(ctx context.Context, fileID string) (domain.F
 }
 
 func (s *Transfers) ResolveShare(ctx context.Context, code string) (ResolveShareResult, error) {
-	shared, err := s.store.ResolveFileShare(ctx, code, s.now().UTC())
+	now := s.now().UTC()
+	shared, err := s.store.ResolveFileShare(ctx, code, now)
 	if err != nil {
 		return ResolveShareResult{}, err
 	}
 
-	target, err := s.storage.SignDownload(ctx, shared.File.StorageKey, shared.File.OriginalName, s.now().UTC().Add(s.signedURLTTL))
+	downloadExpiresAt := now.Add(s.signedURLTTL)
+	if shared.Share.ExpiresAt != nil && shared.Share.ExpiresAt.Before(downloadExpiresAt) {
+		downloadExpiresAt = *shared.Share.ExpiresAt
+	}
+	if shared.File.ExpiresAt != nil && shared.File.ExpiresAt.Before(downloadExpiresAt) {
+		downloadExpiresAt = *shared.File.ExpiresAt
+	}
+
+	target, err := s.storage.SignDownload(ctx, shared.File.StorageKey, shared.File.OriginalName, downloadExpiresAt)
 	if err != nil {
 		return ResolveShareResult{}, fmt.Errorf("sign download: %w", err)
 	}

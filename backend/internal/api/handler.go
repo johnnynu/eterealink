@@ -20,19 +20,69 @@ type ReadinessChecker interface {
 
 type Handler struct {
 	transfers *service.Transfers
+	bundles   *service.Bundles
 	readiness ReadinessChecker
 	logger    *slog.Logger
 }
 
-func NewHandler(transfers *service.Transfers, readiness ReadinessChecker, logger *slog.Logger) http.Handler {
-	handler := &Handler{transfers: transfers, readiness: readiness, logger: logger}
+func NewHandler(transfers *service.Transfers, bundles *service.Bundles, readiness ReadinessChecker, logger *slog.Logger) http.Handler {
+	handler := &Handler{transfers: transfers, bundles: bundles, readiness: readiness, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handler.health)
 	mux.HandleFunc("GET /readyz", handler.ready)
 	mux.HandleFunc("POST /v1/uploads", handler.createAnonymousUpload)
 	mux.HandleFunc("POST /v1/uploads/{id}/complete", handler.completeUpload)
+	mux.HandleFunc("POST /v1/transfers", handler.createAnonymousTransfer)
+	mux.HandleFunc("POST /v1/transfers/{transferID}/files/{fileID}/complete", handler.completeTransferFile)
 	mux.HandleFunc("GET /v1/shares/{code}", handler.resolveShare)
 	return requestLog(logger, recoverPanic(logger, mux))
+}
+
+func (h *Handler) createAnonymousTransfer(w http.ResponseWriter, r *http.Request) {
+	var input service.CreateAnonymousTransferInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.bundles.CreateAnonymousTransfer(r.Context(), input)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidName), errors.Is(err, service.ErrInvalidSize),
+			errors.Is(err, service.ErrInvalidFileCount), errors.Is(err, service.ErrTransferTooLarge),
+			errors.Is(err, service.ErrDuplicateFileName):
+			writeError(w, http.StatusUnprocessableEntity, "validation_failed", err.Error())
+		default:
+			h.logger.Error("create transfer failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to create transfer")
+		}
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (h *Handler) completeTransferFile(w http.ResponseWriter, r *http.Request) {
+	transferID := strings.TrimSpace(r.PathValue("transferID"))
+	fileID := strings.TrimSpace(r.PathValue("fileID"))
+	if transferID == "" || fileID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "transfer id and file id are required")
+		return
+	}
+	file, transfer, err := h.bundles.CompleteFile(r.Context(), transferID, fileID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "transfer upload was not found")
+		case errors.Is(err, service.ErrUploadObjectMissing):
+			writeError(w, http.StatusConflict, "upload_missing", "uploaded object was not found")
+		case errors.Is(err, service.ErrUploadObjectMismatch):
+			writeError(w, http.StatusConflict, "upload_mismatch", "uploaded object does not match declared metadata")
+		default:
+			h.logger.Error("complete transfer file failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to complete transfer file")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"file": file, "transfer": transfer})
 }
 
 func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
@@ -104,6 +154,14 @@ func (h *Handler) resolveShare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.transfers.ResolveShare(r.Context(), code)
+	if errors.Is(err, domain.ErrNotFound) && h.bundles != nil {
+		bundle, bundleErr := h.bundles.ResolveShare(r.Context(), code)
+		if bundleErr == nil {
+			writeJSON(w, http.StatusOK, bundle)
+			return
+		}
+		err = bundleErr
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrNotFound):
@@ -114,6 +172,8 @@ func (h *Handler) resolveShare(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusGone, "revoked", "share has been revoked")
 		case errors.Is(err, domain.ErrConflict):
 			writeError(w, http.StatusConflict, "upload_incomplete", "file upload is not complete")
+		case errors.Is(err, service.ErrTransferNotReady):
+			writeError(w, http.StatusConflict, "upload_incomplete", "transfer upload is not complete")
 		default:
 			h.logger.Error("resolve share failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "unable to resolve share")

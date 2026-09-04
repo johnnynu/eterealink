@@ -9,16 +9,18 @@ import (
 )
 
 type Config struct {
-	Environment           string
-	HTTPAddr              string
-	DatabaseURL           string
-	PublicAPIURL          string
-	StorageBackend        string
-	GCSBucket             string
-	GCSSigningAccount     string
-	AnonymousFileTTL      time.Duration
-	SignedURLTTL          time.Duration
-	MaxAnonymousFileBytes int64
+	Environment               string
+	HTTPAddr                  string
+	DatabaseURL               string
+	PublicAPIURL              string
+	StorageBackend            string
+	GCSBucket                 string
+	GCSSigningAccount         string
+	AnonymousFileTTL          time.Duration
+	SignedURLTTL              time.Duration
+	MaxAnonymousFileBytes     int64
+	MaxAnonymousTransferBytes int64
+	MaxAnonymousFiles         int
 }
 
 func Load() (Config, error) {
@@ -32,7 +34,15 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	maxFileBytes, err := int64Value("MAX_ANONYMOUS_FILE_BYTES", 100*1024*1024)
+	maxFileBytes, err := int64Value("MAX_ANONYMOUS_FILE_BYTES", 1024*1024*1024)
+	if err != nil {
+		return Config{}, err
+	}
+	maxTransferBytes, err := int64Value("MAX_ANONYMOUS_TRANSFER_BYTES", 1024*1024*1024)
+	if err != nil {
+		return Config{}, err
+	}
+	maxFiles, err := intValue("MAX_ANONYMOUS_FILES", 10)
 	if err != nil {
 		return Config{}, err
 	}
@@ -48,17 +58,34 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Environment:           value("APP_ENV", "development"),
-		HTTPAddr:              value("HTTP_ADDR", ":8080"),
-		DatabaseURL:           value("DATABASE_URL", "postgres://eterealink:eterealink@localhost:5432/eterealink?sslmode=disable"),
-		PublicAPIURL:          value("PUBLIC_API_URL", "http://localhost:8080"),
-		StorageBackend:        storageBackend,
-		GCSBucket:             gcsBucket,
-		GCSSigningAccount:     gcsSigningAccount,
-		AnonymousFileTTL:      anonymousTTL,
-		SignedURLTTL:          signedURLTTL,
-		MaxAnonymousFileBytes: maxFileBytes,
+		Environment:               value("APP_ENV", "development"),
+		HTTPAddr:                  value("HTTP_ADDR", ":8080"),
+		DatabaseURL:               value("DATABASE_URL", "postgres://eterealink:eterealink@localhost:5432/eterealink?sslmode=disable"),
+		PublicAPIURL:              value("PUBLIC_API_URL", "http://localhost:8080"),
+		StorageBackend:            storageBackend,
+		GCSBucket:                 gcsBucket,
+		GCSSigningAccount:         gcsSigningAccount,
+		AnonymousFileTTL:          anonymousTTL,
+		SignedURLTTL:              signedURLTTL,
+		MaxAnonymousFileBytes:     maxFileBytes,
+		MaxAnonymousTransferBytes: maxTransferBytes,
+		MaxAnonymousFiles:         maxFiles,
 	}, nil
+}
+
+func intValue(key string, fallback int) (int, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	result, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	if result <= 0 {
+		return 0, fmt.Errorf("%s must be positive", key)
+	}
+	return result, nil
 }
 
 func value(key, fallback string) string {

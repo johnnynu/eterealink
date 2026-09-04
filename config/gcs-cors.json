@@ -7,12 +7,17 @@
     "method": [
       "GET",
       "HEAD",
+      "POST",
       "PUT"
     ],
     "responseHeader": [
       "Content-Type",
       "Content-Length",
+      "Content-Range",
       "ETag",
+      "Location",
+      "Range",
+      "X-Goog-Resumable",
       "X-Goog-If-Generation-Match"
     ],
     "maxAgeSeconds": 3600
