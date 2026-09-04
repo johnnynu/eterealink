@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/eterealink/eterealink/backend/internal/domain"
+	"github.com/eterealink/eterealink/backend/internal/identity"
 	"github.com/eterealink/eterealink/backend/internal/service"
 )
 
@@ -21,21 +22,94 @@ type ReadinessChecker interface {
 type Handler struct {
 	transfers *service.Transfers
 	bundles   *service.Bundles
+	users     *service.Users
+	verifier  identity.Verifier
 	readiness ReadinessChecker
 	logger    *slog.Logger
 }
 
-func NewHandler(transfers *service.Transfers, bundles *service.Bundles, readiness ReadinessChecker, logger *slog.Logger) http.Handler {
-	handler := &Handler{transfers: transfers, bundles: bundles, readiness: readiness, logger: logger}
+func NewHandler(
+	transfers *service.Transfers,
+	bundles *service.Bundles,
+	users *service.Users,
+	verifier identity.Verifier,
+	readiness ReadinessChecker,
+	logger *slog.Logger,
+) http.Handler {
+	handler := &Handler{
+		transfers: transfers, bundles: bundles, users: users, verifier: verifier,
+		readiness: readiness, logger: logger,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handler.health)
 	mux.HandleFunc("GET /readyz", handler.ready)
+	mux.Handle("GET /v1/me", handler.requireAuthentication(http.HandlerFunc(handler.me)))
 	mux.HandleFunc("POST /v1/uploads", handler.createAnonymousUpload)
 	mux.HandleFunc("POST /v1/uploads/{id}/complete", handler.completeUpload)
 	mux.HandleFunc("POST /v1/transfers", handler.createAnonymousTransfer)
 	mux.HandleFunc("POST /v1/transfers/{transferID}/files/{fileID}/complete", handler.completeTransferFile)
 	mux.HandleFunc("GET /v1/shares/{code}", handler.resolveShare)
 	return requestLog(logger, recoverPanic(logger, mux))
+}
+
+type authenticatedUserContextKey struct{}
+
+func (h *Handler) requireAuthentication(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.verifier == nil || h.users == nil {
+			writeError(w, http.StatusServiceUnavailable, "authentication_unavailable", "authentication is not configured")
+			return
+		}
+		rawToken, ok := bearerToken(r.Header.Get("Authorization"))
+		if !ok {
+			writeAuthenticationRequired(w, "a valid bearer token is required")
+			return
+		}
+		claims, err := h.verifier.VerifyIDToken(r.Context(), rawToken)
+		if err != nil {
+			h.logger.Warn("firebase token verification failed", "error", err)
+			writeAuthenticationRequired(w, "a valid bearer token is required")
+			return
+		}
+		user, err := h.users.Provision(r.Context(), service.AuthenticatedIdentity{
+			FirebaseUID: claims.UID,
+			Email:       claims.Email,
+			DisplayName: claims.DisplayName,
+		})
+		if errors.Is(err, service.ErrInvalidIdentity) {
+			writeAuthenticationRequired(w, "the authenticated identity is incomplete")
+			return
+		}
+		if err != nil {
+			h.logger.Error("provision authenticated user failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to provision user")
+			return
+		}
+		ctx := context.WithValue(r.Context(), authenticatedUserContextKey{}, user)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func bearerToken(value string) (string, bool) {
+	parts := strings.Fields(value)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
+func writeAuthenticationRequired(w http.ResponseWriter, message string) {
+	w.Header().Set("WWW-Authenticate", `Bearer realm="eterealink"`)
+	writeError(w, http.StatusUnauthorized, "unauthenticated", message)
+}
+
+func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
+	user, ok := r.Context().Value(authenticatedUserContextKey{}).(domain.User)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": user})
 }
 
 func (h *Handler) createAnonymousTransfer(w http.ResponseWriter, r *http.Request) {

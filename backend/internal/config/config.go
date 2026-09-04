@@ -16,6 +16,7 @@ type Config struct {
 	StorageBackend            string
 	GCSBucket                 string
 	GCSSigningAccount         string
+	FirebaseProjectID         string
 	AnonymousFileTTL          time.Duration
 	SignedURLTTL              time.Duration
 	MaxAnonymousFileBytes     int64
@@ -65,6 +66,7 @@ func Load() (Config, error) {
 		StorageBackend:            storageBackend,
 		GCSBucket:                 gcsBucket,
 		GCSSigningAccount:         gcsSigningAccount,
+		FirebaseProjectID:         value("FIREBASE_PROJECT_ID", ""),
 		AnonymousFileTTL:          anonymousTTL,
 		SignedURLTTL:              signedURLTTL,
 		MaxAnonymousFileBytes:     maxFileBytes,

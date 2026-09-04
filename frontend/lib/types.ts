@@ -10,6 +10,13 @@ export type FileRecord = {
   expiresAt?: string;
 };
 
+export type UserRecord = {
+  id: string;
+  email: string;
+  displayName: string;
+  createdAt: string;
+};
+
 export type ShareRecord = {
   id: string;
   shortCode: string;

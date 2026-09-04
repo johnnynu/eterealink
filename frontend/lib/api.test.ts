@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { APIError, createAnonymousTransfer, createAnonymousUpload, resolveShare, uploadResumable } from "./api";
+import { APIError, createAnonymousTransfer, createAnonymousUpload, getCurrentUser, resolveShare, uploadResumable } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -25,6 +25,21 @@ describe("API client", () => {
     }), { status: 410, headers: { "Content-Type": "application/json" } })));
 
     await expect(resolveShare("old-link")).rejects.toEqual(new APIError("share has expired", 410, "expired"));
+  });
+
+  it("sends the Firebase ID token when loading the current user", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      user: { id: "user-1", email: "person@example.com", displayName: "Person", createdAt: "2026-09-03T00:00:00Z" },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = await getCurrentUser("firebase-token");
+
+    expect(user.email).toBe("person@example.com");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/me", {
+      headers: { Authorization: "Bearer firebase-token" },
+      cache: "no-store",
+    });
   });
 
   it("creates one transfer request containing every selected file", async () => {

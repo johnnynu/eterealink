@@ -10,7 +10,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 3—the local backend foundation, direct Cloud Storage transfer layer, and anonymous sharing experience—are complete.
+Phases 1 through 4—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, and Firebase authentication—are complete.
 
 Implemented:
 
@@ -33,6 +33,9 @@ Implemented:
 - Streaming background ZIP generation with individual-file download fallback
 - Recipient share page with ZIP readiness polling, authorized downloads, live time remaining, and distinct expired/revoked/missing states
 - Frontend lint, unit-test, and production-build checks
+- Optional Firebase Google Sign-In without changing the anonymous transfer flow
+- Server-side Firebase ID-token verification and idempotent local user provisioning
+- Live end-to-end identity verification against the Eterealink Firebase project
 
 The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
 
@@ -119,6 +122,7 @@ An anonymous transfer follows this path:
 |---|---|---|
 | `GET` | `/healthz` | Process liveness |
 | `GET` | `/readyz` | Database-aware readiness |
+| `GET` | `/v1/me` | Verify a Firebase bearer token and return the provisioned user |
 | `POST` | `/v1/uploads` | Create anonymous file/share metadata and an upload target |
 | `POST` | `/v1/uploads/{id}/complete` | Mark a successful direct upload ready |
 | `POST` | `/v1/transfers` | Create one anonymous multi-file transfer and resumable targets |
@@ -135,7 +139,7 @@ An anonymous transfer follows this path:
 
 ### Run the API
 
-1. Copy the values in `.env.example` into your shell or preferred local environment manager.
+1. Copy `.env.example` to `.env` and set the local values. Make automatically exports values from this ignored file; direct `go run` commands still require the values in your shell.
 2. Start PostgreSQL:
 
    ```bash
@@ -173,6 +177,8 @@ make test
 
 To complete a browser upload, use the real GCS backend by following the [Phase 2 GCP setup guide](./docs/setup/gcp-phase2-gcs.md). Multi-file uploads and ZIP output use that same bucket; no second bucket is required. In local development the API process runs the archive worker. It can be separated into a Cloud Run Job when the application is deployed. The default `development` backend remains available for metadata-only work and unit tests, but intentionally cannot accept file bytes.
 
+To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup/firebase-phase4.md). Authentication is optional in local development: when Firebase variables are absent, anonymous transfers continue to work and the sign-in control stays hidden.
+
 ## Delivery roadmap
 
 | Phase | Outcome |
@@ -180,7 +186,7 @@ To complete a browser upload, use the real GCS backend by following the [Phase 2
 | 1. Local backend ✅ | PostgreSQL-backed anonymous transfer metadata and lifecycle |
 | 2. File transfer ✅ | Real direct uploads/downloads through Cloud Storage signed URLs |
 | 3. Anonymous sharing ✅ | No-account upload-to-share experience with enforced 24-hour expiry |
-| 4. Authentication | Firebase Google Sign-In and verified API identity |
+| 4. Authentication ✅ | Firebase Google Sign-In and verified API identity |
 | 5. Folders | Persistent user files and OWNER/VIEWER folder sharing |
 | 6. Previews | Browser previews with a safe generic fallback |
 | 7-10. Cloud platform | Containers, Cloud Run, private networking, and Terraform |

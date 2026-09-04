@@ -48,6 +48,21 @@ func (p *Postgres) Ping(ctx context.Context) error {
 	return nil
 }
 
+func (p *Postgres) UpsertUser(ctx context.Context, user domain.User) (domain.User, error) {
+	row := p.pool.QueryRow(ctx, `
+		INSERT INTO users (id, firebase_uid, email, display_name, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (firebase_uid) DO UPDATE
+		SET email = EXCLUDED.email, display_name = EXCLUDED.display_name
+		RETURNING id, firebase_uid, email, display_name, created_at`,
+		user.ID, user.FirebaseUID, user.Email, user.DisplayName, user.CreatedAt,
+	)
+	if err := row.Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.CreatedAt); err != nil {
+		return domain.User{}, fmt.Errorf("upsert user: %w", err)
+	}
+	return user, nil
+}
+
 func (p *Postgres) CreateAnonymousUpload(ctx context.Context, file domain.File, share domain.ShareLink) error {
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {

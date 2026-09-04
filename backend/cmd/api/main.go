@@ -13,6 +13,7 @@ import (
 	"github.com/eterealink/eterealink/backend/internal/api"
 	"github.com/eterealink/eterealink/backend/internal/config"
 	"github.com/eterealink/eterealink/backend/internal/database"
+	"github.com/eterealink/eterealink/backend/internal/identity"
 	"github.com/eterealink/eterealink/backend/internal/service"
 	"github.com/eterealink/eterealink/backend/internal/storage"
 )
@@ -49,6 +50,14 @@ func run(logger *slog.Logger) error {
 		storageBackend = gcsBackend
 	}
 	transfers := service.NewTransfers(db, storageBackend, time.Now, cfg.AnonymousFileTTL, cfg.SignedURLTTL, cfg.MaxAnonymousFileBytes)
+	users := service.NewUsers(db, time.Now)
+	var tokenVerifier identity.Verifier
+	if cfg.FirebaseProjectID != "" {
+		tokenVerifier, err = identity.NewFirebaseVerifier(startupContext, cfg.FirebaseProjectID)
+		if err != nil {
+			return err
+		}
+	}
 	bundles := service.NewBundles(
 		db, storageBackend, time.Now, cfg.AnonymousFileTTL, cfg.SignedURLTTL,
 		cfg.MaxAnonymousFileBytes, cfg.MaxAnonymousTransferBytes, cfg.MaxAnonymousFiles,
@@ -62,7 +71,7 @@ func run(logger *slog.Logger) error {
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewHandler(transfers, bundles, db, logger),
+		Handler:           api.NewHandler(transfers, bundles, users, tokenVerifier, db, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

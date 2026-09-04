@@ -1,4 +1,4 @@
-import type { CreateTransferResult, CreateUploadResult, ShareResult, UploadTarget } from "@/lib/types";
+import type { CreateTransferResult, CreateUploadResult, ShareResult, UploadTarget, UserRecord } from "@/lib/types";
 
 type APIErrorBody = {
   error?: {
@@ -46,6 +46,15 @@ export async function createAnonymousUpload(file: File): Promise<CreateUploadRes
     }),
   });
   return parseResponse<CreateUploadResult>(response);
+}
+
+export async function getCurrentUser(idToken: string): Promise<UserRecord> {
+  const response = await fetch("/api/v1/me", {
+    headers: { Authorization: `Bearer ${idToken}` },
+    cache: "no-store",
+  });
+  const result = await parseResponse<{ user: UserRecord }>(response);
+  return result.user;
 }
 
 export async function createAnonymousTransfer(files: File[]): Promise<CreateTransferResult> {

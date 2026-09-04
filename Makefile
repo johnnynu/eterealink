@@ -1,3 +1,8 @@
+ifneq (,$(wildcard .env))
+include .env
+export
+endif
+
 .PHONY: fmt test backend-test frontend-test frontend-install run frontend-run frontend-build migrate-up migrate-down
 
 fmt:

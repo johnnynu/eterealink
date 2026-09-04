@@ -12,6 +12,14 @@ var (
 	ErrConflict = errors.New("resource conflict")
 )
 
+type User struct {
+	ID          string    `json:"id"`
+	FirebaseUID string    `json:"-"`
+	Email       string    `json:"email"`
+	DisplayName string    `json:"displayName"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
 type FileStatus string
 
 const (

@@ -38,3 +38,15 @@ func TestConfigurationRejectsUnknownStorageBackend(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 }
+
+func TestFirebaseProjectConfiguration(t *testing.T) {
+	t.Setenv("FIREBASE_PROJECT_ID", "eterealink-dev")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.FirebaseProjectID != "eterealink-dev" {
+		t.Fatalf("firebase project id = %q", config.FirebaseProjectID)
+	}
+}
