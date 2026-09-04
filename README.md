@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./eterealink_logo.png" alt="Eterealink" width="900">
+</p>
+
 # Eterealink
 
 Eterealink is a cloud-native file-sharing platform for quickly uploading, organizing, previewing, and sharing files through short URLs. Anonymous transfers require no account and expire after 24 hours; authenticated users will be able to retain files, organize them into folders, and manage sharing.
