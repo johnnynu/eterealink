@@ -141,6 +141,208 @@ func (p *Postgres) CompleteUpload(ctx context.Context, fileID string, now time.T
 	return file, nil
 }
 
+func (p *Postgres) CreateOwnedFile(ctx context.Context, file domain.File) error {
+	_, err := p.pool.Exec(ctx, `
+		INSERT INTO files (
+			id, owner_id, folder_id, storage_key, original_name, mime_type,
+			size_bytes, upload_status, created_at, expires_at
+		) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, NULL)`,
+		file.ID, file.OwnerID, file.StorageKey, file.OriginalName, file.MIMEType,
+		file.SizeBytes, file.Status, file.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("insert owned file: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) GetOwnedFile(ctx context.Context, ownerID, fileID string) (domain.File, error) {
+	file, err := scanFile(p.pool.QueryRow(ctx, `
+		SELECT id, owner_id, folder_id, transfer_id, storage_key, original_name, mime_type,
+		       size_bytes, upload_status, created_at, completed_at, expires_at
+		FROM files
+		WHERE id = $1 AND owner_id = $2`, fileID, ownerID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.File{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.File{}, fmt.Errorf("get owned file: %w", err)
+	}
+	return file, nil
+}
+
+func (p *Postgres) CompleteOwnedFile(ctx context.Context, ownerID, fileID string, now time.Time) (domain.File, error) {
+	file, err := scanFile(p.pool.QueryRow(ctx, `
+		UPDATE files
+		SET upload_status = 'READY', completed_at = COALESCE(completed_at, $3)
+		WHERE id = $1 AND owner_id = $2 AND upload_status IN ('PENDING', 'READY')
+		RETURNING id, owner_id, folder_id, transfer_id, storage_key, original_name, mime_type,
+		          size_bytes, upload_status, created_at, completed_at, expires_at`,
+		fileID, ownerID, now,
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.File{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.File{}, fmt.Errorf("complete owned file: %w", err)
+	}
+	return file, nil
+}
+
+func (p *Postgres) ListOwnedFiles(ctx context.Context, ownerID string, now time.Time) ([]domain.OwnedFile, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, owner_id, folder_id, transfer_id, storage_key, original_name, mime_type,
+		       size_bytes, upload_status, created_at, completed_at, expires_at
+		FROM files
+		WHERE owner_id = $1 AND upload_status = 'READY'
+		ORDER BY created_at DESC`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("list owned files: %w", err)
+	}
+	defer rows.Close()
+
+	files := make([]domain.OwnedFile, 0)
+	for rows.Next() {
+		file, err := scanFile(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan owned file: %w", err)
+		}
+		files = append(files, domain.OwnedFile{File: file})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list owned files: %w", err)
+	}
+	rows.Close()
+
+	shareRows, err := p.pool.Query(ctx, `
+		SELECT s.id, s.short_code, s.file_id, s.folder_id, s.transfer_id, s.created_by,
+		       s.created_at, s.expires_at, s.revoked_at
+		FROM share_links s
+		JOIN files f ON f.id = s.file_id
+		WHERE f.owner_id = $1
+		  AND s.revoked_at IS NULL
+		  AND (s.expires_at IS NULL OR s.expires_at > $2)
+		ORDER BY s.created_at DESC`, ownerID, now)
+	if err != nil {
+		return nil, fmt.Errorf("list owned file shares: %w", err)
+	}
+	defer shareRows.Close()
+	sharesByFile := make(map[string]domain.ShareLink)
+	for shareRows.Next() {
+		var share domain.ShareLink
+		if err := shareRows.Scan(
+			&share.ID, &share.ShortCode, &share.FileID, &share.FolderID, &share.TransferID,
+			&share.CreatedBy, &share.CreatedAt, &share.ExpiresAt, &share.RevokedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan owned file share: %w", err)
+		}
+		if share.FileID != nil {
+			if _, exists := sharesByFile[*share.FileID]; !exists {
+				sharesByFile[*share.FileID] = share
+			}
+		}
+	}
+	if err := shareRows.Err(); err != nil {
+		return nil, fmt.Errorf("list owned file shares: %w", err)
+	}
+	for index := range files {
+		if share, ok := sharesByFile[files[index].File.ID]; ok {
+			files[index].Share = &share
+		}
+	}
+	return files, nil
+}
+
+func (p *Postgres) GetOwnedFileUsage(ctx context.Context, ownerID string) (domain.FileLibrarySummary, error) {
+	var summary domain.FileLibrarySummary
+	if err := p.pool.QueryRow(ctx, `
+		SELECT count(*), COALESCE(sum(size_bytes), 0)
+		FROM files
+		WHERE owner_id = $1 AND upload_status = 'READY'`, ownerID).Scan(&summary.FileCount, &summary.TotalBytes); err != nil {
+		return domain.FileLibrarySummary{}, fmt.Errorf("get owned file usage: %w", err)
+	}
+	return summary, nil
+}
+
+func (p *Postgres) CreateOwnedFileShare(ctx context.Context, ownerID, fileID string, share domain.ShareLink, now time.Time) error {
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin owned file share transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var status domain.FileStatus
+	err = tx.QueryRow(ctx, `
+		SELECT upload_status FROM files
+		WHERE id = $1 AND owner_id = $2
+		FOR UPDATE`, fileID, ownerID).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock owned file for sharing: %w", err)
+	}
+	if status != domain.FileStatusReady {
+		return domain.ErrConflict
+	}
+
+	var hasActiveShare bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM share_links
+			WHERE file_id = $1 AND revoked_at IS NULL
+			  AND (expires_at IS NULL OR expires_at > $2)
+		)`, fileID, now).Scan(&hasActiveShare); err != nil {
+		return fmt.Errorf("check active owned file share: %w", err)
+	}
+	if hasActiveShare {
+		return domain.ErrConflict
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO share_links (
+			id, short_code, file_id, folder_id, transfer_id, created_by, expires_at, created_at
+		) VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6)`,
+		share.ID, share.ShortCode, fileID, ownerID, share.ExpiresAt, share.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert owned file share: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit owned file share: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) RevokeOwnedFileShare(ctx context.Context, ownerID, fileID, shareID string, now time.Time) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE share_links AS s
+		SET revoked_at = $4
+		FROM files AS f
+		WHERE s.id = $1 AND s.file_id = $2
+		  AND f.id = s.file_id AND f.owner_id = $3
+		  AND s.revoked_at IS NULL
+		  AND (s.expires_at IS NULL OR s.expires_at > $4)`,
+		shareID, fileID, ownerID, now)
+	if err != nil {
+		return fmt.Errorf("revoke owned file share: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+func (p *Postgres) DeleteOwnedFile(ctx context.Context, ownerID, fileID string) error {
+	tag, err := p.pool.Exec(ctx, `DELETE FROM files WHERE id = $1 AND owner_id = $2`, fileID, ownerID)
+	if err != nil {
+		return fmt.Errorf("delete owned file: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 func (p *Postgres) ResolveFileShare(ctx context.Context, code string, now time.Time) (domain.SharedFile, error) {
 	row := p.pool.QueryRow(ctx, `
 		SELECT

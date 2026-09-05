@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   GoogleAuthProvider,
   onIdTokenChanged,
@@ -17,6 +17,7 @@ type AuthContextValue = {
   busy: boolean;
   user: UserRecord | null;
   error: string;
+  getIDToken: () => Promise<string>;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -80,6 +81,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const getIDToken = useCallback(async () => {
+    const firebaseUser = getFirebaseAuth()?.currentUser;
+    if (!firebaseUser) throw new Error("A signed-in session is required.");
+    return firebaseUser.getIdToken();
+  }, []);
+
   async function signOut() {
     const auth = getFirebaseAuth();
     if (!auth) return;
@@ -101,9 +108,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     busy,
     user,
     error,
+    getIDToken,
     signIn,
     signOut,
-  }), [loading, busy, user, error]);
+  }), [loading, busy, user, error, getIDToken]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

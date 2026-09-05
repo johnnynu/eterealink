@@ -1,4 +1,16 @@
-import type { CreateTransferResult, CreateUploadResult, ShareResult, UploadTarget, UserRecord } from "@/lib/types";
+import type {
+  CreatePersistentUploadResult,
+  CreatePersistentShareResult,
+  CreateTransferResult,
+  CreateUploadResult,
+  FileDownloadResult,
+  FileLibraryResult,
+  FileRecord,
+  PersistentShareExpiration,
+  ShareResult,
+  UploadTarget,
+  UserRecord,
+} from "@/lib/types";
 
 type APIErrorBody = {
   error?: {
@@ -55,6 +67,82 @@ export async function getCurrentUser(idToken: string): Promise<UserRecord> {
   });
   const result = await parseResponse<{ user: UserRecord }>(response);
   return result.user;
+}
+
+function bearerHeaders(idToken: string, contentType = false) {
+  return {
+    Authorization: `Bearer ${idToken}`,
+    ...(contentType ? { "Content-Type": "application/json" } : {}),
+  };
+}
+
+export async function createPersistentUpload(file: File, idToken: string): Promise<CreatePersistentUploadResult> {
+  const response = await fetch("/api/v1/files", {
+    method: "POST",
+    headers: bearerHeaders(idToken, true),
+    body: JSON.stringify({
+      originalName: file.name,
+      mimeType: file.type || "application/octet-stream",
+      sizeBytes: file.size,
+    }),
+  });
+  return parseResponse<CreatePersistentUploadResult>(response);
+}
+
+export async function completePersistentUpload(fileID: string, idToken: string): Promise<FileRecord> {
+  const response = await fetch(`/api/v1/files/${encodeURIComponent(fileID)}/complete`, {
+    method: "POST",
+    headers: bearerHeaders(idToken),
+  });
+  const result = await parseResponse<{ file: FileRecord }>(response);
+  return result.file;
+}
+
+export async function listPersistentFiles(idToken: string): Promise<FileLibraryResult> {
+  const response = await fetch("/api/v1/files", {
+    headers: bearerHeaders(idToken),
+    cache: "no-store",
+  });
+  return parseResponse<FileLibraryResult>(response);
+}
+
+export async function createPersistentFileShare(
+  fileID: string,
+  expiresIn: PersistentShareExpiration,
+  idToken: string,
+): Promise<CreatePersistentShareResult> {
+  const response = await fetch(`/api/v1/files/${encodeURIComponent(fileID)}/shares`, {
+    method: "POST",
+    headers: bearerHeaders(idToken, true),
+    body: JSON.stringify({ expiresIn }),
+  });
+  return parseResponse<CreatePersistentShareResult>(response);
+}
+
+export async function revokePersistentFileShare(fileID: string, shareID: string, idToken: string): Promise<void> {
+  const response = await fetch(
+    `/api/v1/files/${encodeURIComponent(fileID)}/shares/${encodeURIComponent(shareID)}`,
+    { method: "DELETE", headers: bearerHeaders(idToken) },
+  );
+  if (response.ok) return;
+  await parseResponse(response);
+}
+
+export async function getPersistentFileDownload(fileID: string, idToken: string): Promise<FileDownloadResult> {
+  const response = await fetch(`/api/v1/files/${encodeURIComponent(fileID)}/download`, {
+    headers: bearerHeaders(idToken),
+    cache: "no-store",
+  });
+  return parseResponse<FileDownloadResult>(response);
+}
+
+export async function deletePersistentFile(fileID: string, idToken: string): Promise<void> {
+  const response = await fetch(`/api/v1/files/${encodeURIComponent(fileID)}`, {
+    method: "DELETE",
+    headers: bearerHeaders(idToken),
+  });
+  if (response.ok) return;
+  await parseResponse(response);
 }
 
 export async function createAnonymousTransfer(files: File[]): Promise<CreateTransferResult> {

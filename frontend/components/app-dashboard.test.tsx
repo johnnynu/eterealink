@@ -8,10 +8,15 @@ const authState = vi.hoisted(() => ({
   configured: true,
   loading: false,
   user: null as null | { id: string; email: string; displayName: string; createdAt: string },
+  getIDToken: vi.fn(async () => "token"),
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
 vi.mock("@/components/auth-context", () => ({ useAuth: () => authState }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  listPersistentFiles: vi.fn(async () => ({ files: [], summary: { fileCount: 0, totalBytes: 0 } })),
+}));
 
 const mounted: Array<{ container: HTMLDivElement; unmount: () => void }> = [];
 
@@ -45,6 +50,7 @@ describe("AppDashboard", () => {
     expect(container.textContent).toContain("Welcome back, Person.");
     expect(container.textContent).toContain("Your files");
     expect(container.textContent).toContain("Shared with you");
+    expect(container.textContent).toContain("Upload files");
     expect(container.textContent).toContain("Create a link");
     expect(container.querySelector("#workspace-files")).not.toBeNull();
   });

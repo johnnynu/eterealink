@@ -22,6 +22,7 @@ type ReadinessChecker interface {
 type Handler struct {
 	transfers *service.Transfers
 	bundles   *service.Bundles
+	files     *service.Files
 	users     *service.Users
 	verifier  identity.Verifier
 	readiness ReadinessChecker
@@ -31,19 +32,27 @@ type Handler struct {
 func NewHandler(
 	transfers *service.Transfers,
 	bundles *service.Bundles,
+	files *service.Files,
 	users *service.Users,
 	verifier identity.Verifier,
 	readiness ReadinessChecker,
 	logger *slog.Logger,
 ) http.Handler {
 	handler := &Handler{
-		transfers: transfers, bundles: bundles, users: users, verifier: verifier,
+		transfers: transfers, bundles: bundles, files: files, users: users, verifier: verifier,
 		readiness: readiness, logger: logger,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handler.health)
 	mux.HandleFunc("GET /readyz", handler.ready)
 	mux.Handle("GET /v1/me", handler.requireAuthentication(http.HandlerFunc(handler.me)))
+	mux.Handle("POST /v1/files", handler.requireAuthentication(http.HandlerFunc(handler.createPersistentFile)))
+	mux.Handle("GET /v1/files", handler.requireAuthentication(http.HandlerFunc(handler.listPersistentFiles)))
+	mux.Handle("POST /v1/files/{id}/complete", handler.requireAuthentication(http.HandlerFunc(handler.completePersistentFile)))
+	mux.Handle("GET /v1/files/{id}/download", handler.requireAuthentication(http.HandlerFunc(handler.downloadPersistentFile)))
+	mux.Handle("POST /v1/files/{id}/shares", handler.requireAuthentication(http.HandlerFunc(handler.createPersistentFileShare)))
+	mux.Handle("DELETE /v1/files/{id}/shares/{shareID}", handler.requireAuthentication(http.HandlerFunc(handler.revokePersistentFileShare)))
+	mux.Handle("DELETE /v1/files/{id}", handler.requireAuthentication(http.HandlerFunc(handler.deletePersistentFile)))
 	mux.HandleFunc("POST /v1/uploads", handler.createAnonymousUpload)
 	mux.HandleFunc("POST /v1/uploads/{id}/complete", handler.completeUpload)
 	mux.HandleFunc("POST /v1/transfers", handler.createAnonymousTransfer)
@@ -104,12 +113,186 @@ func writeAuthenticationRequired(w http.ResponseWriter, message string) {
 }
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
-	user, ok := r.Context().Value(authenticatedUserContextKey{}).(domain.User)
+	user, ok := authenticatedUser(r)
 	if !ok {
 		writeAuthenticationRequired(w, "a valid bearer token is required")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
+func authenticatedUser(r *http.Request) (domain.User, bool) {
+	user, ok := r.Context().Value(authenticatedUserContextKey{}).(domain.User)
+	return user, ok
+}
+
+func (h *Handler) createPersistentFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	var input service.CreateFileUploadInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.files.CreateUpload(r.Context(), user.ID, input)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidName), errors.Is(err, service.ErrInvalidSize):
+			writeError(w, http.StatusUnprocessableEntity, "validation_failed", err.Error())
+		default:
+			h.logger.Error("create persistent upload failed", "user_id", user.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to create persistent upload")
+		}
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (h *Handler) listPersistentFiles(w http.ResponseWriter, r *http.Request) {
+	user, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	library, err := h.files.List(r.Context(), user.ID)
+	if err != nil {
+		h.logger.Error("list persistent files failed", "user_id", user.ID, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "unable to list files")
+		return
+	}
+	writeJSON(w, http.StatusOK, library)
+}
+
+func (h *Handler) completePersistentFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	if fileID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "file id is required")
+		return
+	}
+	file, err := h.files.CompleteUpload(r.Context(), user.ID, fileID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "file upload was not found")
+		case errors.Is(err, service.ErrUploadObjectMissing):
+			writeError(w, http.StatusConflict, "upload_missing", "uploaded object was not found")
+		case errors.Is(err, service.ErrUploadObjectMismatch):
+			writeError(w, http.StatusConflict, "upload_mismatch", "uploaded object does not match declared metadata")
+		default:
+			h.logger.Error("complete persistent upload failed", "user_id", user.ID, "file_id", fileID, "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to complete persistent upload")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"file": file})
+}
+
+func (h *Handler) downloadPersistentFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	result, err := h.files.Download(r.Context(), user.ID, fileID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "file was not found")
+		case errors.Is(err, domain.ErrConflict):
+			writeError(w, http.StatusConflict, "upload_incomplete", "file upload is not complete")
+		default:
+			h.logger.Error("create persistent download failed", "user_id", user.ID, "file_id", fileID, "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to prepare file download")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) createPersistentFileShare(w http.ResponseWriter, r *http.Request) {
+	user, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	if fileID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "file id is required")
+		return
+	}
+	var input service.CreateFileShareInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.files.CreateShare(r.Context(), user.ID, fileID, input)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidShareExpiration):
+			writeError(w, http.StatusUnprocessableEntity, "validation_failed", err.Error())
+		case errors.Is(err, domain.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "file was not found")
+		case errors.Is(err, domain.ErrConflict):
+			writeError(w, http.StatusConflict, "share_conflict", "file is not ready or already has an active link")
+		default:
+			h.logger.Error("create persistent file share failed", "user_id", user.ID, "file_id", fileID, "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to create share link")
+		}
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (h *Handler) revokePersistentFileShare(w http.ResponseWriter, r *http.Request) {
+	user, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	shareID := strings.TrimSpace(r.PathValue("shareID"))
+	if fileID == "" || shareID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "file id and share id are required")
+		return
+	}
+	if err := h.files.RevokeShare(r.Context(), user.ID, fileID, shareID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "active share link was not found")
+			return
+		}
+		h.logger.Error("revoke persistent file share failed", "user_id", user.ID, "file_id", fileID, "share_id", shareID, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "unable to revoke share link")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) deletePersistentFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	fileID := strings.TrimSpace(r.PathValue("id"))
+	if err := h.files.Delete(r.Context(), user.ID, fileID); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", "file was not found")
+			return
+		}
+		h.logger.Error("delete persistent file failed", "user_id", user.ID, "file_id", fileID, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "unable to delete file")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) createAnonymousTransfer(w http.ResponseWriter, r *http.Request) {

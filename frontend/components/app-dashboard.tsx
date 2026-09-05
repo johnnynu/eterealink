@@ -3,7 +3,8 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-context";
-import { FileIcon, FolderIcon, LinkIcon, UsersIcon } from "@/components/icons";
+import { FolderIcon, LinkIcon, UploadIcon, UsersIcon } from "@/components/icons";
+import { PersistentFileLibrary } from "@/components/persistent-file-library";
 import { UploadWorkspace } from "@/components/upload-workspace";
 
 function firstName(displayName: string, email: string) {
@@ -37,34 +38,25 @@ export function AppDashboard() {
           <h1>Welcome back, {firstName(user.displayName, user.email)}.</h1>
           <p>Keep what matters, organize it simply, and share only when you choose.</p>
         </div>
-        <a className="primary-button compact-button" href="#temporary-transfer">
-          <LinkIcon /> Send a 24-hour link
-        </a>
+        <div className="workspace-primary-actions">
+          <label className="primary-button compact-button" htmlFor="owned-files-input">
+            <UploadIcon /> Upload files
+          </label>
+          <a className="secondary-button compact-button" href="#temporary-transfer">
+            <LinkIcon /> Send a 24-hour link
+          </a>
+        </div>
       </section>
 
       <section className="library-panel" aria-labelledby="library-title">
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Library</p>
-            <h2 id="library-title">Your files</h2>
-          </div>
-          <span className="status-pill">Private to you</span>
-        </div>
-
-        <div className="library-empty">
-          <span className="empty-icon"><FileIcon /></span>
-          <div>
-            <h3>Your library is ready.</h3>
-            <p>Persistent uploads will appear here when file storage is connected to your account.</p>
-          </div>
-        </div>
+        <PersistentFileLibrary />
 
         <div className="workspace-columns">
           <article className="workspace-summary-card">
             <span className="summary-icon"><FolderIcon /></span>
             <div>
               <h3>Folders</h3>
-              <p>Your folders will keep files grouped without changing how they are stored.</p>
+              <p>Organize your persistent files without changing how they are stored.</p>
             </div>
             <span className="coming-label">Coming next</span>
           </article>

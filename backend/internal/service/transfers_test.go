@@ -136,6 +136,33 @@ func TestShareDownloadURLDoesNotOutliveAnonymousTransfer(t *testing.T) {
 	}
 }
 
+func TestPersistentShareResolutionHidesInternalOwnerIDs(t *testing.T) {
+	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
+	ownerID := "internal-user-id"
+	fileID := "persistent-file-id"
+	store := newMemoryStore()
+	store.files[fileID] = domain.File{
+		ID: fileID, OwnerID: &ownerID, StorageKey: "users/internal-user-id/files/persistent-file-id",
+		OriginalName: "notes.txt", MIMEType: "text/plain", SizeBytes: 5,
+		Status: domain.FileStatusReady, CreatedAt: now,
+	}
+	store.shares["persistent"] = domain.ShareLink{
+		ID: "share-id", ShortCode: "persistent", FileID: &fileID, CreatedBy: &ownerID, CreatedAt: now,
+	}
+	transfers := NewTransfers(store, fakeBackend{}, func() time.Time { return now }, 24*time.Hour, 15*time.Minute, 100)
+
+	resolved, err := transfers.ResolveShare(context.Background(), "persistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.File.OwnerID != nil || resolved.Share.CreatedBy != nil {
+		t.Fatalf("public response leaked internal IDs: %#v", resolved)
+	}
+	if !resolved.DownloadTarget.ExpiresAt.Equal(now.Add(15 * time.Minute)) {
+		t.Fatalf("download expiration = %v", resolved.DownloadTarget.ExpiresAt)
+	}
+}
+
 func TestCompleteUploadVerifiesStoredObject(t *testing.T) {
 	now := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.UTC)
 

@@ -167,6 +167,9 @@ func (s *Transfers) ResolveShare(ctx context.Context, code string) (ResolveShare
 	if err != nil {
 		return ResolveShareResult{}, fmt.Errorf("sign download: %w", err)
 	}
+	// Public share responses must not expose internal account identifiers.
+	shared.File.OwnerID = nil
+	shared.Share.CreatedBy = nil
 	return ResolveShareResult{File: shared.File, Share: shared.Share, DownloadTarget: target}, nil
 }
 

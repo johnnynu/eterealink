@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="./eterealink_logo.png" alt="Eterealink" width="900">
+  <img src="./eterea-chrome-final.png" alt="Eterealink" width="900">
 </p>
 
 # Eterealink
 
-Eterealink is a cloud-native file-sharing platform for quickly uploading, organizing, previewing, and sharing files through short URLs. Anonymous transfers require no account and expire after 24 hours; authenticated users will be able to retain files, organize them into folders, and manage sharing.
+Eterealink is a cloud-native file-sharing platform for quickly uploading, organizing, previewing, and sharing files through short URLs. Anonymous transfers require no account and expire after 24 hours; authenticated users can retain private files and create revocable per-file links, with folders and folder sharing following in Phase 5.
 
 The project is designed as both a useful product and a practical demonstration of cloud architecture, networking, security, infrastructure as code, CI/CD, and observability on Google Cloud Platform.
 
 ## Project status
 
-Phases 1 through 4—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, and Firebase authentication—are complete.
+Phases 1 through 4—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, and Firebase authentication—are complete. The pre-Phase 5 persistent-file library is also implemented.
 
 Implemented:
 
@@ -36,6 +36,10 @@ Implemented:
 - Optional Firebase Google Sign-In without changing the anonymous transfer flow
 - Server-side Firebase ID-token verification and idempotent local user provisioning
 - Live end-to-end identity verification against the Eterealink Firebase project
+- Owner-scoped persistent uploads, file listing, authorized downloads, deletion, and revocable share links
+- A 5 GiB per-file limit for authenticated persistent uploads while anonymous transfers remain capped at 1 GiB combined
+- Persistent-library storage totals, drag-and-drop, filename search, shared-file filtering, sorting, and bounded pagination
+- Signed-in `/app` workspace with a private file library and a separate 24-hour transfer flow
 
 The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
 
@@ -123,6 +127,13 @@ An anonymous transfer follows this path:
 | `GET` | `/healthz` | Process liveness |
 | `GET` | `/readyz` | Database-aware readiness |
 | `GET` | `/v1/me` | Verify a Firebase bearer token and return the provisioned user |
+| `POST` | `/v1/files` | Create owner-linked persistent file metadata and an upload target |
+| `GET` | `/v1/files` | List the authenticated user's ready files and aggregate storage usage |
+| `POST` | `/v1/files/{id}/complete` | Verify and complete an owned persistent upload |
+| `GET` | `/v1/files/{id}/download` | Create an authorized short-lived download target for an owned file |
+| `POST` | `/v1/files/{id}/shares` | Create an expiring or non-expiring public link for an owned file |
+| `DELETE` | `/v1/files/{id}/shares/{shareID}` | Revoke an active link for an owned file |
+| `DELETE` | `/v1/files/{id}` | Delete an owned persistent file and its storage object |
 | `POST` | `/v1/uploads` | Create anonymous file/share metadata and an upload target |
 | `POST` | `/v1/uploads/{id}/complete` | Mark a successful direct upload ready |
 | `POST` | `/v1/transfers` | Create one anonymous multi-file transfer and resumable targets |
@@ -187,7 +198,8 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 2. File transfer ✅ | Real direct uploads/downloads through Cloud Storage signed URLs |
 | 3. Anonymous sharing ✅ | No-account upload-to-share experience with enforced 24-hour expiry |
 | 4. Authentication ✅ | Firebase Google Sign-In and verified API identity |
-| 5. Folders | Persistent user files and OWNER/VIEWER folder sharing |
+| 4.5. Persistent files ✅ | Owner-scoped uploads, private file library, downloads, and deletion |
+| 5. Folders | OWNER/VIEWER folder organization and sharing |
 | 6. Previews | Browser previews with a safe generic fallback |
 | 7-10. Cloud platform | Containers, Cloud Run, private networking, and Terraform |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |

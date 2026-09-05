@@ -92,3 +92,14 @@ type SharedFile struct {
 	Share ShareLink `json:"share"`
 	File  File      `json:"file"`
 }
+
+type OwnedFile struct {
+	File      File       `json:"file"`
+	Share     *ShareLink `json:"share,omitempty"`
+	SharePath string     `json:"sharePath,omitempty"`
+}
+
+type FileLibrarySummary struct {
+	FileCount  int64 `json:"fileCount"`
+	TotalBytes int64 `json:"totalBytes"`
+}

@@ -48,6 +48,7 @@ type Backend interface {
 	TransferBackend
 	ReadObject(ctx context.Context, storageKey string) (io.ReadCloser, error)
 	WriteObject(ctx context.Context, storageKey, mimeType string, write func(io.Writer) error) (ObjectAttributes, error)
+	DeleteObject(ctx context.Context, storageKey string) error
 }
 
 // DevelopmentSigner preserves the production signed-URL contract while the GCS
@@ -89,6 +90,10 @@ func (DevelopmentSigner) ReadObject(_ context.Context, storageKey string) (io.Re
 
 func (DevelopmentSigner) WriteObject(_ context.Context, storageKey, _ string, _ func(io.Writer) error) (ObjectAttributes, error) {
 	return ObjectAttributes{}, fmt.Errorf("%w: cannot write %q with the development signer", ErrUnavailable, storageKey)
+}
+
+func (DevelopmentSigner) DeleteObject(_ context.Context, storageKey string) error {
+	return fmt.Errorf("%w: cannot delete %q with the development signer", ErrUnavailable, storageKey)
 }
 
 func join(baseURL, suffix, storageKey string) string {

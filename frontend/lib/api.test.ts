@@ -1,5 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { APIError, createAnonymousTransfer, createAnonymousUpload, getCurrentUser, resolveShare, uploadResumable } from "./api";
+import {
+  APIError,
+  createAnonymousTransfer,
+  createAnonymousUpload,
+  createPersistentFileShare,
+  createPersistentUpload,
+  getCurrentUser,
+  listPersistentFiles,
+  revokePersistentFileShare,
+  resolveShare,
+  uploadResumable,
+} from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -39,6 +50,54 @@ describe("API client", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/me", {
       headers: { Authorization: "Bearer firebase-token" },
       cache: "no-store",
+    });
+  });
+
+  it("sends verified identity with persistent file operations", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ file: {}, uploadTarget: {} }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ files: [], summary: { fileCount: 0, totalBytes: 0 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createPersistentUpload(new File(["hello"], "hello.txt", { type: "text/plain" }), "firebase-token");
+    await listPersistentFiles("firebase-token");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/files", expect.objectContaining({
+      method: "POST",
+      headers: { Authorization: "Bearer firebase-token", "Content-Type": "application/json" },
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/files", {
+      headers: { Authorization: "Bearer firebase-token" },
+      cache: "no-store",
+    });
+  });
+
+  it("creates and revokes an authenticated persistent share", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ share: {}, sharePath: "/s/sharecode" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createPersistentFileShare("file-1", "30d", "firebase-token");
+    await revokePersistentFileShare("file-1", "share-1", "firebase-token");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/files/file-1/shares", {
+      method: "POST",
+      headers: { Authorization: "Bearer firebase-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ expiresIn: "30d" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/files/file-1/shares/share-1", {
+      method: "DELETE",
+      headers: { Authorization: "Bearer firebase-token" },
     });
   });
 

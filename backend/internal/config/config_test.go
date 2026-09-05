@@ -50,3 +50,28 @@ func TestFirebaseProjectConfiguration(t *testing.T) {
 		t.Fatalf("firebase project id = %q", config.FirebaseProjectID)
 	}
 }
+
+func TestPersistentFileLimitConfiguration(t *testing.T) {
+	t.Setenv("MAX_PERSISTENT_FILE_BYTES", "2048")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MaxPersistentFileBytes != 2048 {
+		t.Fatalf("persistent file limit = %d", config.MaxPersistentFileBytes)
+	}
+}
+
+func TestPersistentFileLimitDefaultsToFiveGiB(t *testing.T) {
+	t.Setenv("MAX_PERSISTENT_FILE_BYTES", "")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = int64(5 * 1024 * 1024 * 1024)
+	if config.MaxPersistentFileBytes != want {
+		t.Fatalf("persistent file limit = %d, want %d", config.MaxPersistentFileBytes, want)
+	}
+}

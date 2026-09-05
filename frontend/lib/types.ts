@@ -41,6 +41,42 @@ export type CreateUploadResult = {
   uploadTarget: UploadTarget;
 };
 
+export type CreatePersistentUploadResult = {
+  file: FileRecord;
+  uploadTarget: UploadTarget;
+};
+
+export type OwnedFileRecord = {
+  file: FileRecord;
+  share?: ShareRecord;
+  sharePath?: string;
+};
+
+export type FileLibrarySummary = {
+  fileCount: number;
+  totalBytes: number;
+};
+
+export type FileLibraryResult = {
+  files: OwnedFileRecord[];
+  summary: FileLibrarySummary;
+};
+
+export type PersistentShareExpiration = "24h" | "7d" | "30d" | "never";
+
+export type CreatePersistentShareResult = {
+  share: ShareRecord;
+  sharePath: string;
+};
+
+export type FileDownloadResult = {
+  file: FileRecord;
+  downloadTarget: {
+    url: string;
+    expiresAt: string;
+  };
+};
+
 export type ResolveShareResult = {
   file: FileRecord;
   share: ShareRecord;

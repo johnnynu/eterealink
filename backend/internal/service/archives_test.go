@@ -128,3 +128,11 @@ func (b *archiveMemoryBackend) WriteObject(_ context.Context, key, _ string, wri
 	b.objects[key] = bytes.Clone(destination.Bytes())
 	return storage.ObjectAttributes{SizeBytes: int64(destination.Len()), MIMEType: "application/zip"}, nil
 }
+
+func (b *archiveMemoryBackend) DeleteObject(_ context.Context, key string) error {
+	if _, ok := b.objects[key]; !ok {
+		return storage.ErrObjectNotFound
+	}
+	delete(b.objects, key)
+	return nil
+}

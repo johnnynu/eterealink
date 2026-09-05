@@ -122,6 +122,17 @@ func (b *GCSBackend) StatObject(ctx context.Context, storageKey string) (ObjectA
 	return ObjectAttributes{SizeBytes: attributes.Size, MIMEType: attributes.ContentType}, nil
 }
 
+func (b *GCSBackend) DeleteObject(ctx context.Context, storageKey string) error {
+	err := b.client.Bucket(b.bucketName).Object(storageKey).Delete(ctx)
+	if errors.Is(err, cloudstorage.ErrObjectNotExist) {
+		return ErrObjectNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("delete gs://%s/%s: %w", b.bucketName, storageKey, err)
+	}
+	return nil
+}
+
 func (b *GCSBackend) ReadObject(ctx context.Context, storageKey string) (io.ReadCloser, error) {
 	reader, err := b.client.Bucket(b.bucketName).Object(storageKey).NewReader(ctx)
 	if errors.Is(err, cloudstorage.ErrObjectNotExist) {

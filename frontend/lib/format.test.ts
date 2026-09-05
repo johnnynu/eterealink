@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, timeRemaining } from "./format";
+import { formatBytes, formatFileType, formatRelativeDate, timeRemaining } from "./format";
 
 describe("formatBytes", () => {
   it("uses readable binary units", () => {
@@ -19,5 +19,19 @@ describe("timeRemaining", () => {
 
   it("marks an elapsed timestamp as expired", () => {
     expect(timeRemaining("2026-09-02T12:00:00Z", now)).toBe("Expired");
+  });
+});
+
+describe("file metadata formatting", () => {
+  it("uses human-readable file categories", () => {
+    expect(formatFileType("application/pdf", "report.pdf")).toBe("PDF document");
+    expect(formatFileType("image/webp", "photo.webp")).toBe("Image");
+    expect(formatFileType("application/octet-stream", "backup.tar")).toBe("TAR file");
+  });
+
+  it("uses concise relative upload dates", () => {
+    const now = Date.parse("2026-09-03T12:00:00Z");
+    expect(formatRelativeDate("2026-09-03T11:58:00Z", now)).toBe("2m ago");
+    expect(formatRelativeDate("2026-09-01T12:00:00Z", now)).toBe("2d ago");
   });
 });
