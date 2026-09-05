@@ -17,9 +17,10 @@ var (
 	ErrInvalidFolderName   = errors.New("folder name must contain 1 to 255 characters")
 	ErrFolderNotEmpty      = errors.New("folder must be empty before it can be deleted")
 	ErrInvalidFolderMove   = errors.New("a folder cannot be moved into itself or one of its descendants")
-	ErrInvalidMember       = errors.New("viewer must be a different existing Eterealink user")
+	ErrInvalidMember       = errors.New("member must be a different existing Eterealink user")
 	ErrTooManyFiles        = errors.New("choose between 1 and 100 files")
 	ErrInvalidLibraryQuery = errors.New("library search or cursor is invalid")
+	ErrInvalidFolderRole   = errors.New("folder role must be VIEWER or CONTRIBUTOR")
 )
 
 type FolderStore interface {
@@ -29,9 +30,15 @@ type FolderStore interface {
 	UpdateFolder(ctx context.Context, ownerID, folderID, name string, parentFolderID *string) (domain.Folder, error)
 	DeleteFolder(ctx context.Context, ownerID, folderID string) error
 	ListFolderMembers(ctx context.Context, ownerID, folderID string) ([]domain.FolderMember, error)
-	AddFolderMember(ctx context.Context, ownerID, folderID, email string, createdAt time.Time) (domain.FolderMember, error)
+	AddFolderMember(ctx context.Context, ownerID, folderID, email string, role domain.FolderRole, createdAt time.Time) (domain.FolderMember, error)
 	RemoveFolderMember(ctx context.Context, ownerID, folderID, userID string) error
 	MoveOwnedFiles(ctx context.Context, ownerID string, fileIDs []string, folderID *string) error
+	RemoveContributedFile(ctx context.Context, folderOwnerID, folderID, fileID string) error
+	CreateFolderInvite(ctx context.Context, ownerID string, invite domain.FolderInvite) error
+	ListFolderInvites(ctx context.Context, ownerID, folderID string, now time.Time) ([]domain.FolderInvite, error)
+	RevokeFolderInvite(ctx context.Context, ownerID, folderID, inviteID string, now time.Time) error
+	GetFolderInvitePreview(ctx context.Context, shortCode string, now time.Time) (domain.FolderInvitePreview, error)
+	AcceptFolderInvite(ctx context.Context, userID, shortCode string, now time.Time) (domain.FolderAccess, error)
 }
 
 type Folders struct {
@@ -52,6 +59,17 @@ type UpdateFolderInput struct {
 
 type AddFolderMemberInput struct {
 	Email string `json:"email"`
+	Role  string `json:"role"`
+}
+
+type CreateFolderInviteInput struct {
+	Role      string `json:"role"`
+	ExpiresIn string `json:"expiresIn"`
+}
+
+type CreateFolderInviteResult struct {
+	Invite     domain.FolderInvite `json:"invite"`
+	InvitePath string              `json:"invitePath"`
 }
 
 type MoveFilesInput struct {
@@ -219,7 +237,22 @@ func (s *Folders) AddMember(ctx context.Context, ownerID, folderID string, input
 	if email == "" {
 		return domain.FolderMember{}, ErrInvalidMember
 	}
-	return s.store.AddFolderMember(ctx, ownerID, folderID, email, s.now().UTC())
+	role, err := folderMemberRole(input.Role)
+	if err != nil {
+		return domain.FolderMember{}, err
+	}
+	return s.store.AddFolderMember(ctx, ownerID, folderID, email, role, s.now().UTC())
+}
+
+func folderMemberRole(value string) (domain.FolderRole, error) {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "", string(domain.FolderRoleViewer):
+		return domain.FolderRoleViewer, nil
+	case string(domain.FolderRoleContributor):
+		return domain.FolderRoleContributor, nil
+	default:
+		return "", ErrInvalidFolderRole
+	}
 }
 
 func (s *Folders) RemoveMember(ctx context.Context, ownerID, folderID, userID string) error {
@@ -243,4 +276,55 @@ func (s *Folders) MoveFiles(ctx context.Context, ownerID string, input MoveFiles
 		}
 	}
 	return s.store.MoveOwnedFiles(ctx, ownerID, ids, normalizeOptionalID(input.FolderID))
+}
+
+func (s *Folders) RemoveContributedFile(ctx context.Context, ownerID, folderID, fileID string) error {
+	return s.store.RemoveContributedFile(ctx, ownerID, strings.TrimSpace(folderID), strings.TrimSpace(fileID))
+}
+
+func (s *Folders) CreateInvite(ctx context.Context, ownerID, folderID string, input CreateFolderInviteInput) (CreateFolderInviteResult, error) {
+	role, err := folderMemberRole(input.Role)
+	if err != nil {
+		return CreateFolderInviteResult{}, err
+	}
+	now := s.now().UTC()
+	expiresAt, err := persistentShareExpiration(now, input.ExpiresIn)
+	if err != nil {
+		return CreateFolderInviteResult{}, err
+	}
+	id, err := newUUID()
+	if err != nil {
+		return CreateFolderInviteResult{}, err
+	}
+	code, err := newShortCode()
+	if err != nil {
+		return CreateFolderInviteResult{}, err
+	}
+	invite := domain.FolderInvite{
+		ID: id, FolderID: folderID, CreatedBy: ownerID, ShortCode: code, Role: role, CreatedAt: now, ExpiresAt: expiresAt,
+	}
+	if err := s.store.CreateFolderInvite(ctx, ownerID, invite); err != nil {
+		return CreateFolderInviteResult{}, err
+	}
+	return CreateFolderInviteResult{Invite: invite, InvitePath: "/join/" + code}, nil
+}
+
+func (s *Folders) Invites(ctx context.Context, ownerID, folderID string) ([]domain.FolderInvite, error) {
+	invites, err := s.store.ListFolderInvites(ctx, ownerID, folderID, s.now().UTC())
+	if invites == nil {
+		invites = []domain.FolderInvite{}
+	}
+	return invites, err
+}
+
+func (s *Folders) RevokeInvite(ctx context.Context, ownerID, folderID, inviteID string) error {
+	return s.store.RevokeFolderInvite(ctx, ownerID, folderID, inviteID, s.now().UTC())
+}
+
+func (s *Folders) PreviewInvite(ctx context.Context, shortCode string) (domain.FolderInvitePreview, error) {
+	return s.store.GetFolderInvitePreview(ctx, strings.TrimSpace(shortCode), s.now().UTC())
+}
+
+func (s *Folders) AcceptInvite(ctx context.Context, userID, shortCode string) (domain.FolderAccess, error) {
+	return s.store.AcceptFolderInvite(ctx, userID, strings.TrimSpace(shortCode), s.now().UTC())
 }

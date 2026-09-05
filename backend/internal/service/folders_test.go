@@ -57,11 +57,59 @@ func TestFoldersRootScopeAndMemberNormalization(t *testing.T) {
 	if store.scope != "owned" {
 		t.Fatalf("scope = %q", store.scope)
 	}
-	if _, err := folders.AddMember(context.Background(), "user-1", "folder-1", AddFolderMemberInput{Email: " Viewer@Example.COM "}); err != nil {
+	if _, err := folders.AddMember(context.Background(), "user-1", "folder-1", AddFolderMemberInput{Email: " Viewer@Example.COM ", Role: "VIEWER"}); err != nil {
 		t.Fatal(err)
 	}
 	if store.memberEmail != "viewer@example.com" {
 		t.Fatalf("member email = %q", store.memberEmail)
+	}
+	if store.memberRole != domain.FolderRoleViewer {
+		t.Fatalf("member role = %q", store.memberRole)
+	}
+	if _, err := folders.AddMember(context.Background(), "user-1", "folder-1", AddFolderMemberInput{Email: "editor@example.com", Role: "contributor"}); err != nil {
+		t.Fatal(err)
+	}
+	if store.memberRole != domain.FolderRoleContributor {
+		t.Fatalf("contributor role = %q", store.memberRole)
+	}
+	if _, err := folders.AddMember(context.Background(), "user-1", "folder-1", AddFolderMemberInput{Email: "editor@example.com", Role: "OWNER"}); !errors.Is(err, ErrInvalidFolderRole) {
+		t.Fatalf("invalid role error = %v", err)
+	}
+}
+
+func TestFoldersCreateAndAcceptInvite(t *testing.T) {
+	now := time.Date(2026, time.September, 4, 12, 0, 0, 0, time.UTC)
+	store := &folderStoreStub{}
+	folders := NewFolders(store, func() time.Time { return now })
+
+	result, err := folders.CreateInvite(context.Background(), "owner-1", "folder-1", CreateFolderInviteInput{Role: "CONTRIBUTOR", ExpiresIn: "7d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Invite.Role != domain.FolderRoleContributor || result.Invite.ExpiresAt == nil || !result.Invite.ExpiresAt.Equal(now.Add(7*24*time.Hour)) {
+		t.Fatalf("invite = %#v", result.Invite)
+	}
+	if result.InvitePath != "/join/"+result.Invite.ShortCode || store.invite.ID != result.Invite.ID {
+		t.Fatalf("invite result = %#v, stored = %#v", result, store.invite)
+	}
+	if _, err := folders.CreateInvite(context.Background(), "owner-1", "folder-1", CreateFolderInviteInput{Role: "OWNER", ExpiresIn: "7d"}); !errors.Is(err, ErrInvalidFolderRole) {
+		t.Fatalf("invalid invite role error = %v", err)
+	}
+	if _, err := folders.CreateInvite(context.Background(), "owner-1", "folder-1", CreateFolderInviteInput{Role: "VIEWER", ExpiresIn: "forever"}); !errors.Is(err, ErrInvalidShareExpiration) {
+		t.Fatalf("invalid invite expiration error = %v", err)
+	}
+
+	if _, err := folders.AcceptInvite(context.Background(), "user-2", "  join-code  "); err != nil {
+		t.Fatal(err)
+	}
+	if store.acceptedCode != "join-code" || !store.acceptedAt.Equal(now) {
+		t.Fatalf("accepted code = %q at %v", store.acceptedCode, store.acceptedAt)
+	}
+	if _, err := folders.PreviewInvite(context.Background(), "  preview-code  "); err != nil {
+		t.Fatal(err)
+	}
+	if store.previewCode != "preview-code" || !store.previewAt.Equal(now) {
+		t.Fatalf("preview code = %q at %v", store.previewCode, store.previewAt)
 	}
 }
 
@@ -93,6 +141,12 @@ type folderStoreStub struct {
 	movedIDs      []string
 	movedFolderID *string
 	memberEmail   string
+	memberRole    domain.FolderRole
+	invite        domain.FolderInvite
+	acceptedCode  string
+	acceptedAt    time.Time
+	previewCode   string
+	previewAt     time.Time
 	contents      domain.FolderContents
 	hasMore       bool
 	query         domain.FileLibraryQuery
@@ -123,9 +177,10 @@ func (*folderStoreStub) ListFolderMembers(context.Context, string, string) ([]do
 	return nil, nil
 }
 
-func (s *folderStoreStub) AddFolderMember(_ context.Context, _, _, email string, createdAt time.Time) (domain.FolderMember, error) {
+func (s *folderStoreStub) AddFolderMember(_ context.Context, _, _, email string, role domain.FolderRole, createdAt time.Time) (domain.FolderMember, error) {
 	s.memberEmail = email
-	return domain.FolderMember{Role: domain.FolderRoleViewer, CreatedAt: createdAt}, nil
+	s.memberRole = role
+	return domain.FolderMember{Role: role, CreatedAt: createdAt}, nil
 }
 
 func (*folderStoreStub) RemoveFolderMember(context.Context, string, string, string) error { return nil }
@@ -134,4 +189,28 @@ func (s *folderStoreStub) MoveOwnedFiles(_ context.Context, _ string, fileIDs []
 	s.movedIDs = fileIDs
 	s.movedFolderID = folderID
 	return nil
+}
+
+func (*folderStoreStub) RemoveContributedFile(context.Context, string, string, string) error {
+	return nil
+}
+func (s *folderStoreStub) CreateFolderInvite(_ context.Context, _ string, invite domain.FolderInvite) error {
+	s.invite = invite
+	return nil
+}
+func (*folderStoreStub) ListFolderInvites(context.Context, string, string, time.Time) ([]domain.FolderInvite, error) {
+	return nil, nil
+}
+func (*folderStoreStub) RevokeFolderInvite(context.Context, string, string, string, time.Time) error {
+	return nil
+}
+func (s *folderStoreStub) GetFolderInvitePreview(_ context.Context, code string, now time.Time) (domain.FolderInvitePreview, error) {
+	s.previewCode = code
+	s.previewAt = now
+	return domain.FolderInvitePreview{}, nil
+}
+func (s *folderStoreStub) AcceptFolderInvite(_ context.Context, _, code string, now time.Time) (domain.FolderAccess, error) {
+	s.acceptedCode = code
+	s.acceptedAt = now
+	return domain.FolderAccess{}, nil
 }

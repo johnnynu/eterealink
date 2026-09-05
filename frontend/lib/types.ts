@@ -1,5 +1,6 @@
 export type FileRecord = {
 	id: string;
+	ownerId?: string;
 	folderId?: string;
   transferId?: string;
   originalName: string;
@@ -50,6 +51,7 @@ export type CreatePersistentUploadResult = {
 
 export type OwnedFileRecord = {
   file: FileRecord;
+	uploaderName?: string;
   share?: ShareRecord;
   sharePath?: string;
 };
@@ -65,7 +67,7 @@ export type FileLibraryResult = {
   summary: FileLibrarySummary;
 };
 
-export type FolderRole = "OWNER" | "VIEWER";
+export type FolderRole = "OWNER" | "CONTRIBUTOR" | "VIEWER";
 
 export type FolderRecord = {
 	id: string;
@@ -83,8 +85,28 @@ export type FolderAccess = {
 
 export type FolderMember = {
 	user: UserRecord;
-	role: "VIEWER";
+	role: "VIEWER" | "CONTRIBUTOR";
 	createdAt: string;
+	expiresAt?: string;
+	inherited?: boolean;
+	sourceFolderId?: string;
+	sourceFolderName?: string;
+};
+
+export type FolderInvite = {
+	id: string;
+	folderId: string;
+	shortCode: string;
+	role: "VIEWER" | "CONTRIBUTOR";
+	createdAt: string;
+	expiresAt?: string;
+};
+
+export type FolderInvitePreview = {
+	folderName: string;
+	ownerName: string;
+	role: "VIEWER" | "CONTRIBUTOR";
+	expiresAt?: string;
 };
 
 export type FolderContents = {

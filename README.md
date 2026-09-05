@@ -4,13 +4,13 @@
 
 # Eterealink
 
-Eterealink is a cloud-native file-sharing platform for quickly uploading, organizing, previewing, and sharing files through short URLs. Anonymous transfers require no account and expire after 24 hours; authenticated users can retain private files, organize them into folders, and share files or read-only folders.
+Eterealink is a cloud-native file-sharing platform for quickly uploading, organizing, previewing, and sharing files through short URLs. Anonymous transfers require no account and expire after 24 hours; authenticated users can retain private files, organize them into folders, and collaborate through role-based shared folders.
 
 The project is designed as both a useful product and a practical demonstration of cloud architecture, networking, security, infrastructure as code, CI/CD, and observability on Google Cloud Platform.
 
 ## Project status
 
-Phases 1 through 5—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, and virtual folder workflows—are complete.
+Phases 1 through 5.1—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, and folder collaboration—are complete.
 
 Implemented:
 
@@ -41,8 +41,11 @@ Implemented:
 - Persistent-library storage totals, drag-and-drop, filename search, shared-file filtering, sorting, and bounded pagination
 - Signed-in `/app` workspace with a private file library and a separate 24-hour transfer flow
 - Nested virtual folders with breadcrumbs, folder-scoped uploads, renaming, and empty-folder deletion
-- Owner-only file and folder mutations with inherited read-only viewer access
-- Folder sharing with existing Eterealink users plus a dedicated “Shared with me” workspace
+- Inherited Viewer and Contributor folder roles with a dedicated “Shared with me” workspace
+- Descendant access panels that show inherited members and link back to the folder where access was granted
+- Expiring, revocable folder invite links with a first-time-user sign-in handoff, plus direct email-based access
+- Contributor uploads charged to the uploader's quota, with permanent file mutations restricted to that uploader
+- Owner-safe contribution removal that returns files to the uploader's private library
 - Multi-select file moves and deletion, including moves back to the library root
 - Persistent per-file upload queue with progress, cancel, retry, and independent failure handling
 - Atomic 25 GiB account storage quota enforcement, configurable independently from the 5 GiB per-file limit
@@ -55,7 +58,7 @@ The complete anonymous metadata → direct GCS upload → completion → short-l
 - Transfer file bytes directly between browsers and object storage rather than proxying them through the API.
 - Provide short, human-shareable URLs without exposing internal IDs.
 - Support previews for common images, documents, video, audio, and text.
-- Give signed-in users persistent files, virtual folders, revocable links, and read-only folder sharing.
+- Give signed-in users persistent files, virtual folders, revocable links, and role-based folder collaboration.
 - Keep the deployed portfolio application inexpensive at low traffic.
 
 ## Architecture
@@ -146,9 +149,15 @@ An anonymous transfer follows this path:
 | `GET` | `/v1/folders/{id}` | Browse an accessible folder with server-side search, sorting, filtering, and cursor pagination |
 | `PATCH` | `/v1/folders/{id}` | Rename or move an owned folder |
 | `DELETE` | `/v1/folders/{id}` | Delete an owned folder after it is empty |
-| `GET` | `/v1/folders/{id}/members` | List a folder's read-only viewers as its owner |
-| `POST` | `/v1/folders/{id}/members` | Grant read-only folder access to an existing user by email |
-| `DELETE` | `/v1/folders/{id}/members/{userID}` | Revoke a viewer's folder access |
+| `GET` | `/v1/folders/{id}/members` | List a folder's viewers and contributors as its owner |
+| `POST` | `/v1/folders/{id}/members` | Grant Viewer or Contributor access to an existing user by email |
+| `DELETE` | `/v1/folders/{id}/members/{userID}` | Revoke folder access and return that member's contributions to their private library |
+| `GET` | `/v1/folders/{id}/invites` | List active authenticated invite links as the folder owner |
+| `POST` | `/v1/folders/{id}/invites` | Create a Viewer or Contributor invite link with a joining deadline |
+| `DELETE` | `/v1/folders/{id}/invites/{inviteID}` | Revoke a folder invite link |
+| `GET` | `/v1/folder-invites/{code}` | Resolve a privacy-limited invite preview containing the owner name, folder name, role, and joining deadline |
+| `POST` | `/v1/folder-invites/{code}/accept` | Accept an active folder invite as the authenticated user |
+| `DELETE` | `/v1/folders/{id}/files/{fileID}` | Remove another user's contribution from an owned folder without deleting their file |
 | `POST` | `/v1/uploads` | Create anonymous file/share metadata and an upload target |
 | `POST` | `/v1/uploads/{id}/complete` | Mark a successful direct upload ready |
 | `POST` | `/v1/transfers` | Create one anonymous multi-file transfer and resumable targets |
@@ -215,7 +224,9 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 4. Authentication ✅ | Firebase Google Sign-In and verified API identity |
 | 4.5. Persistent files ✅ | Owner-scoped uploads, private file library, downloads, and deletion |
 | 5. Folders ✅ | OWNER/VIEWER folders, bulk workflows, upload queue, quota, sharing, and cursor-based library queries |
+| 5.1. Collaboration ✅ | Scalable access management, personalized expiring invites, Contributor uploads, uploader attribution, and uploader-owned file controls |
 | 6. Previews | Browser previews with a safe generic fallback |
+| 6.5. Realtime collaboration | Authenticated SSE folder invalidation, PostgreSQL notifications, and reconnect-safe refreshes |
 | 7-10. Cloud platform | Containers, Cloud Run, private networking, and Terraform |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |
 

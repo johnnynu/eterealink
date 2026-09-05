@@ -17,7 +17,10 @@ export function AppDashboard() {
   const { configured, loading, user } = useAuth();
 
   useEffect(() => {
-    if (!loading && !user) router.replace("/");
+    if (!loading && !user) {
+      const inviteCode = new URLSearchParams(window.location.search).get("folderInvite");
+      router.replace(inviteCode ? `/join/${encodeURIComponent(inviteCode)}` : "/");
+    }
   }, [loading, router, user]);
 
   if (!configured || loading || !user) {

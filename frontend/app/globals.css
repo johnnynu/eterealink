@@ -185,6 +185,7 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 .folder-breadcrumbs span { display: inline-flex; align-items: center; gap: 6px; }
 .folder-breadcrumbs button { cursor: pointer; border: 0; padding: 3px; color: var(--green); background: transparent; font: 700 12px var(--font-body); }
 .viewer-note { margin: 7px 0 0; color: #8b572c; font-size: 12px; font-weight: 700; }
+.contributor-note { color: var(--green); }
 .folder-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 24px; }
 .folder-tools form { display: flex; min-width: 0; }
 .folder-tools input, .folder-sharing-panel input { width: min(260px, 48vw); height: 40px; border: 1px solid var(--line); border-radius: 10px 0 0 10px; padding: 0 12px; color: var(--ink); background: #fff; font: 500 13px var(--font-body); outline: none; }
@@ -200,13 +201,41 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 .folder-card strong, .folder-card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-card strong { align-self: end; font-size: 13px; }
 .folder-card small { color: var(--muted); font-size: 10px; }
-.folder-sharing-panel { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 12px 20px; margin-top: 14px; padding: 16px; border-radius: 13px; background: rgba(237, 189, 135, .15); }
+.folder-sharing-panel { display: grid; gap: 14px; margin-top: 14px; padding: 16px; border-radius: 13px; background: rgba(237, 189, 135, .15); }
 .folder-sharing-panel p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .folder-sharing-panel form { display: flex; }
-.folder-member { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; padding-top: 10px; border-top: 1px solid rgba(23, 33, 29, .08); }
-.folder-member span { display: grid; gap: 2px; }
+.folder-sharing-heading, .folder-access-section { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.folder-sharing-panel .close-sharing-panel { flex: none; height: 32px; border-radius: 8px; color: var(--green); background: rgba(205, 232, 216, .55); }
+.folder-access-section { padding-top: 13px; border-top: 1px solid rgba(23, 33, 29, .08); }
+.folder-sharing-panel select { height: 40px; border: solid var(--line); border-width: 1px 0; padding: 0 10px; color: var(--ink); background: #fff; font: 650 12px var(--font-body); }
+.invite-link-controls { display: flex; }
+.invite-link-controls select:first-child { border-width: 1px; border-radius: 10px 0 0 10px; }
+.folder-sharing-panel form button svg, .invite-link-controls button svg, .folder-invite button svg { width: 14px; margin-right: 5px; }
+.folder-invite { display: grid; grid-template-columns: minmax(120px, .65fr) minmax(180px, 1fr) auto auto; align-items: center; gap: 8px; padding-top: 12px; border-top: 1px solid rgba(23, 33, 29, .08); }
+.folder-invite > span { display: grid; gap: 2px; }
+.folder-invite small { color: var(--muted); font-size: 10px; }
+.folder-invite input { width: 100%; border-radius: 8px; }
+.folder-invite button { height: 34px; border-radius: 8px; }
+.folder-invite .revoke-folder-access { color: #a04a3f; background: #f8e9e5; }
+.folder-invite-list, .folder-member-section { padding-top: 13px; border-top: 1px solid rgba(23, 33, 29, .08); }
+.folder-invite-list summary { cursor: pointer; display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 13px; font-weight: 750; list-style: none; }
+.folder-invite-list summary::-webkit-details-marker { display: none; }
+.folder-invite-list summary::after { content: "⌄"; margin-left: auto; color: var(--muted); transition: transform .18s ease; }
+.folder-invite-list[open] summary::after { transform: rotate(180deg); }
+.folder-invite-list summary span { min-width: 22px; padding: 3px 7px; border-radius: 999px; text-align: center; color: var(--green); background: rgba(205, 232, 216, .5); font-size: 10px; }
+.folder-invite-list > div { max-height: 260px; overflow-y: auto; overscroll-behavior: contain; padding-right: 5px; scrollbar-color: rgba(31, 116, 88, .32) transparent; }
+.folder-access-empty { margin-top: 10px !important; padding: 10px; border-radius: 9px; background: rgba(255, 255, 255, .45); }
+.folder-member-section > div:first-child { margin-bottom: 9px; }
+.folder-member-list { max-height: 260px; overflow-y: auto; overscroll-behavior: contain; padding-right: 5px; scrollbar-color: rgba(31, 116, 88, .32) transparent; }
+.folder-member { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 12px 0 2px; border-top: 1px solid rgba(23, 33, 29, .08); }
+.folder-member-identity { min-width: 0; display: grid; justify-items: start; gap: 2px; }
+.folder-member-identity > strong, .folder-member-email { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .folder-member small { color: var(--muted); }
+.folder-member-source { max-width: 100%; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 999px; padding: 3px 7px; color: var(--green) !important; background: rgba(205, 232, 216, .38); font-size: 9px; font-weight: 750; }
+.folder-member-controls { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.folder-member em { padding: 5px 8px; border-radius: 999px; color: var(--green); background: rgba(205, 232, 216, .5); font-size: 10px; font-style: normal; font-weight: 750; }
 .folder-member button { height: 32px; border-radius: 8px; color: #a04a3f; background: #f8e9e5; }
+.folder-member .manage-inherited-access { padding-inline: 10px; color: var(--green); background: rgba(205, 232, 216, .55); white-space: nowrap; }
 .folder-owner-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .folder-owner-actions form { display: flex; }
 .folder-owner-actions input { height: 36px; border: 1px solid var(--line); border-radius: 9px 0 0 9px; padding: 0 11px; }
@@ -282,6 +311,7 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 .owned-file-name span, .owned-file-meta { color: var(--muted); font-size: 12px; }
 .owned-file-kind { display: flex; align-items: center; gap: 8px; }
 .owned-file-kind em { flex: none; padding: 2px 6px; border-radius: 999px; color: var(--green); background: rgba(205, 232, 216, .52); font-size: 9px; font-style: normal; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.owned-file-name .file-uploader { color: #77817b; font-size: 10px; font-weight: 650; }
 .owned-file-actions { display: flex; justify-content: flex-end; gap: 4px; }
 .row-action { cursor: pointer; border: 0; border-radius: 8px; padding: 8px 9px; color: var(--muted); background: transparent; font-size: 12px; font-weight: 750; }
 .row-action:hover { color: var(--ink); background: var(--paper); }
@@ -361,6 +391,14 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 .unavailable-card .primary-button { width: 100%; }
 .centered-page { display: flex; justify-content: center; }
 .centered-page .share-card { width: min(100%, 480px); }
+.invite-page { position: relative; width: min(480px, calc(100% - 48px)); min-height: 640px; margin: 0 auto; padding: 90px 0 100px; display: flex; align-items: center; }
+.invite-card { width: 100%; }
+.invite-folder-icon { width: 78px; height: 78px; display: grid; place-items: center; margin-bottom: 26px; border-radius: 22px; color: var(--green); background: var(--mint); transform: rotate(-2deg); }
+.invite-folder-icon svg { width: 38px; }
+.invite-card h1 { max-width: 390px; margin: 0; font: 700 31px/1.16 var(--font-display); letter-spacing: -.045em; }
+.invite-description { max-width: 350px; margin: 17px 0 25px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.invite-sign-in { width: 100%; }
+.invite-card .error-message { margin: 14px 0 0; }
 
 @media (max-width: 900px) {
   .hero { grid-template-columns: 1fr; max-width: 640px; gap: 55px; }
@@ -387,7 +425,7 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 }
 
 @media (max-width: 620px) {
-  .site-header, footer, .hero, .how-it-works, .share-page, .app-page { width: min(100% - 30px, 100%); }
+  .site-header, footer, .hero, .how-it-works, .share-page, .invite-page, .app-page { width: min(100% - 30px, 100%); }
   .site-header { height: 76px; }
   .site-header nav { gap: 10px; }
   .site-header .nav-note, .site-header .nav-link, .user-summary, .workspace-nav-link.is-active { display: none; }
@@ -410,6 +448,7 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
   .how-it-works li > span { grid-row: 1 / 3; margin: 2px 0 0; }
   .how-it-works li p { margin-top: 6px; }
   .share-page { padding: 55px 0 75px; min-height: auto; }
+	.invite-page { min-height: 560px; padding: 55px 0 75px; }
   .share-intro h2 { font-size: 44px; }
   .app-page { padding: 48px 0 75px; }
   .workspace-intro { margin-bottom: 30px; }
@@ -437,11 +476,18 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 	.folder-owner-actions form, .folder-owner-actions input, .folder-owner-actions .delete-folder { width: 100%; }
 	.folder-tools form, .folder-tools input { width: 100%; }
 	.folder-tools .manage-viewers { width: 100%; }
-	.folder-sharing-panel { grid-template-columns: 1fr; }
+	.folder-sharing-heading, .folder-access-section { align-items: stretch; flex-direction: column; }
+	.folder-sharing-heading .close-sharing-panel { align-self: flex-start; }
 	.upload-queue-item { grid-template-columns: minmax(0, 1fr) auto; }
 	.queue-progress { grid-column: 1 / -1; grid-row: 2; }
-	.folder-sharing-panel form { grid-column: 1; }
-	.folder-sharing-panel input { width: 100%; }
+	.folder-sharing-panel form, .invite-link-controls { width: 100%; }
+	.folder-sharing-panel input { width: 100%; min-width: 0; }
+	.folder-sharing-panel select { min-width: 0; }
+	.folder-invite { grid-template-columns: 1fr auto auto; }
+	.folder-invite > span { grid-column: 1 / -1; }
+	.folder-invite input { grid-column: 1 / -1; }
+	.folder-member { grid-template-columns: 1fr; align-items: start; gap: 9px; }
+	.folder-member-controls { justify-content: space-between; }
 	.bulk-actions label { margin-left: 0; }
   .owned-file-actions { grid-column: 2; justify-content: flex-start; }
   .file-share-panel { align-items: stretch; flex-direction: column; }

@@ -156,12 +156,19 @@ func (p *Postgres) CreateOwnedFile(ctx context.Context, file domain.File) error 
 		)
 	} else {
 		tag, err = p.pool.Exec(ctx, `
+			WITH RECURSIVE ancestors AS (
+				SELECT id, owner_id, parent_folder_id FROM folders WHERE id = $3
+				UNION ALL SELECT f.id, f.owner_id, f.parent_folder_id FROM folders f JOIN ancestors a ON a.parent_folder_id = f.id
+			)
 			INSERT INTO files (
 				id, owner_id, folder_id, storage_key, original_name, mime_type,
 				size_bytes, upload_status, created_at, expires_at
 			)
 			SELECT $1, $2, f.id, $4, $5, $6, $7, $8, $9, NULL
-			FROM folders f WHERE f.id = $3 AND f.owner_id = $2`,
+			FROM folders f WHERE f.id = $3 AND (
+				f.owner_id = $2 OR EXISTS (SELECT 1 FROM folder_members m JOIN ancestors a ON a.id = m.folder_id
+					WHERE m.user_id = $2 AND m.role = 'CONTRIBUTOR' AND (m.expires_at IS NULL OR m.expires_at > now()))
+			)`,
 			file.ID, file.OwnerID, file.FolderID, file.StorageKey, file.OriginalName, file.MIMEType,
 			file.SizeBytes, file.Status, file.CreatedAt)
 	}
@@ -209,12 +216,19 @@ func (p *Postgres) CreateOwnedFileWithinQuota(ctx context.Context, file domain.F
 			file.SizeBytes, file.Status, file.CreatedAt)
 	} else {
 		tag, err = tx.Exec(ctx, `
+			WITH RECURSIVE ancestors AS (
+				SELECT id, owner_id, parent_folder_id FROM folders WHERE id = $3
+				UNION ALL SELECT f.id, f.owner_id, f.parent_folder_id FROM folders f JOIN ancestors a ON a.parent_folder_id = f.id
+			)
 			INSERT INTO files (
 				id, owner_id, folder_id, storage_key, original_name, mime_type,
 				size_bytes, upload_status, created_at, expires_at
 			)
 			SELECT $1, $2, f.id, $4, $5, $6, $7, $8, $9, NULL
-			FROM folders f WHERE f.id = $3 AND f.owner_id = $2`,
+			FROM folders f WHERE f.id = $3 AND (
+				f.owner_id = $2 OR EXISTS (SELECT 1 FROM folder_members m JOIN ancestors a ON a.id = m.folder_id
+					WHERE m.user_id = $2 AND m.role = 'CONTRIBUTOR' AND (m.expires_at IS NULL OR m.expires_at > now()))
+			)`,
 			file.ID, file.OwnerID, file.FolderID, file.StorageKey, file.OriginalName, file.MIMEType,
 			file.SizeBytes, file.Status, file.CreatedAt)
 	}
@@ -456,21 +470,20 @@ func (p *Postgres) GetRootContents(ctx context.Context, userID, scope string, no
 	}
 	if scope == "shared" {
 		rows, err := p.pool.Query(ctx, `
-			SELECT f.id, f.owner_id, f.parent_folder_id, f.name, f.created_at,
+			SELECT f.id, f.owner_id, f.parent_folder_id, f.name, f.created_at, m.role,
 			       u.id, u.firebase_uid, u.email, u.display_name, u.created_at
 			FROM folder_members m
 			JOIN folders f ON f.id = m.folder_id
 			JOIN users u ON u.id = f.owner_id
-			WHERE m.user_id = $1
-			ORDER BY lower(f.name), f.id`, userID)
+			WHERE m.user_id = $1 AND (m.expires_at IS NULL OR m.expires_at > $2)
+			ORDER BY lower(f.name), f.id`, userID, now)
 		if err != nil {
 			return result, false, fmt.Errorf("list shared folders: %w", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var access domain.FolderAccess
-			access.Role = domain.FolderRoleViewer
-			if err := rows.Scan(&access.Folder.ID, &access.Folder.OwnerID, &access.Folder.ParentFolderID, &access.Folder.Name, &access.Folder.CreatedAt,
+			if err := rows.Scan(&access.Folder.ID, &access.Folder.OwnerID, &access.Folder.ParentFolderID, &access.Folder.Name, &access.Folder.CreatedAt, &access.Role,
 				&access.Owner.ID, &access.Owner.FirebaseUID, &access.Owner.Email, &access.Owner.DisplayName, &access.Owner.CreatedAt); err != nil {
 				return result, false, fmt.Errorf("scan shared folder: %w", err)
 			}
@@ -523,20 +536,21 @@ func (p *Postgres) GetFolderContents(ctx context.Context, userID, folderID strin
 			FROM folders p JOIN ancestors a ON a.parent_folder_id = p.id
 		)
 		SELECT a.id, a.owner_id, a.parent_folder_id, a.name, a.created_at, a.depth,
-		       EXISTS (SELECT 1 FROM folder_members m WHERE m.folder_id = a.id AND m.user_id = $2)
-		FROM ancestors a ORDER BY a.depth DESC`, folderID, userID)
+		       COALESCE((SELECT m.role FROM folder_members m WHERE m.folder_id = a.id AND m.user_id = $2
+		         AND (m.expires_at IS NULL OR m.expires_at > $3) ORDER BY CASE m.role WHEN 'CONTRIBUTOR' THEN 0 ELSE 1 END LIMIT 1), '')
+		FROM ancestors a ORDER BY a.depth DESC`, folderID, userID, now)
 	if err != nil {
 		return result, false, fmt.Errorf("get folder ancestry: %w", err)
 	}
 	type ancestor struct {
-		folder domain.Folder
-		shared bool
+		folder     domain.Folder
+		memberRole string
 	}
 	ancestors := make([]ancestor, 0)
 	for rows.Next() {
 		var item ancestor
 		var depth int
-		if err := rows.Scan(&item.folder.ID, &item.folder.OwnerID, &item.folder.ParentFolderID, &item.folder.Name, &item.folder.CreatedAt, &depth, &item.shared); err != nil {
+		if err := rows.Scan(&item.folder.ID, &item.folder.OwnerID, &item.folder.ParentFolderID, &item.folder.Name, &item.folder.CreatedAt, &depth, &item.memberRole); err != nil {
 			rows.Close()
 			return result, false, fmt.Errorf("scan folder ancestry: %w", err)
 		}
@@ -557,8 +571,13 @@ func (p *Postgres) GetFolderContents(ctx context.Context, userID, folderID strin
 		breadcrumbStart = 0
 	} else {
 		for index, item := range ancestors {
-			if item.shared {
+			if item.memberRole != "" && breadcrumbStart < 0 {
 				breadcrumbStart = index
+			}
+			if item.memberRole == string(domain.FolderRoleContributor) {
+				role = domain.FolderRoleContributor
+			}
+			if breadcrumbStart >= 0 && role == domain.FolderRoleContributor {
 				break
 			}
 		}
@@ -620,13 +639,16 @@ func (p *Postgres) listFolderFiles(ctx context.Context, ownerID string, folderID
 	statement := `
 		SELECT f.id, f.owner_id, f.folder_id, f.transfer_id, f.storage_key, f.original_name, f.mime_type,
 		       f.size_bytes, f.upload_status, f.created_at, f.completed_at, f.expires_at,
+		       COALESCE(NULLIF(BTRIM(uploader.display_name), ''), 'Eterealink user'),
 		       s.id, s.short_code, s.file_id, s.folder_id, s.transfer_id, s.created_by, s.created_at, s.expires_at, s.revoked_at
 		FROM files f
+		JOIN users uploader ON uploader.id = f.owner_id
 		LEFT JOIN LATERAL (
 			SELECT * FROM share_links sl WHERE sl.file_id = f.id AND sl.revoked_at IS NULL
 			  AND (sl.expires_at IS NULL OR sl.expires_at > @now) ORDER BY sl.created_at DESC LIMIT 1
 		) s ON true
-		WHERE f.owner_id = @owner_id AND f.folder_id IS NOT DISTINCT FROM @folder_id AND f.upload_status = 'READY'
+		WHERE f.folder_id IS NOT DISTINCT FROM @folder_id AND f.upload_status = 'READY'
+		  AND (@folder_id::uuid IS NOT NULL OR f.owner_id = @owner_id)
 		  AND (@search = '' OR f.original_name ILIKE '%' || @search || '%')
 		  AND (NOT @shared_only OR s.id IS NOT NULL)`
 	arguments := pgx.NamedArgs{
@@ -669,7 +691,7 @@ func (p *Postgres) listFolderFiles(ctx context.Context, ownerID string, folderID
 		var shareCreated, shareExpires, shareRevoked *time.Time
 		if err := rows.Scan(&item.File.ID, &item.File.OwnerID, &item.File.FolderID, &item.File.TransferID, &item.File.StorageKey,
 			&item.File.OriginalName, &item.File.MIMEType, &item.File.SizeBytes, &item.File.Status, &item.File.CreatedAt,
-			&item.File.CompletedAt, &item.File.ExpiresAt, &shareID, &shortCode, &shareFileID, &shareFolderID,
+			&item.File.CompletedAt, &item.File.ExpiresAt, &item.UploaderName, &shareID, &shortCode, &shareFileID, &shareFolderID,
 			&shareTransferID, &createdBy, &shareCreated, &shareExpires, &shareRevoked); err != nil {
 			return nil, false, fmt.Errorf("scan folder file: %w", err)
 		}
@@ -751,9 +773,30 @@ func (p *Postgres) DeleteFolder(ctx context.Context, ownerID, folderID string) e
 
 func (p *Postgres) ListFolderMembers(ctx context.Context, ownerID, folderID string) ([]domain.FolderMember, error) {
 	rows, err := p.pool.Query(ctx, `
-		SELECT u.id, u.firebase_uid, u.email, u.display_name, u.created_at, m.role, m.created_at
-		FROM folder_members m JOIN users u ON u.id = m.user_id JOIN folders f ON f.id = m.folder_id
-		WHERE m.folder_id = $1 AND f.owner_id = $2 ORDER BY lower(u.email)`, folderID, ownerID)
+		WITH RECURSIVE ancestors AS (
+			SELECT f.id, f.parent_folder_id, f.name, 0 AS depth
+			FROM folders f WHERE f.id = $1 AND f.owner_id = $2
+			UNION ALL
+			SELECT parent.id, parent.parent_folder_id, parent.name, child.depth + 1
+			FROM folders parent JOIN ancestors child ON child.parent_folder_id = parent.id
+			WHERE parent.owner_id = $2
+		), ranked AS (
+			SELECT u.id, u.firebase_uid, u.email, u.display_name, u.created_at,
+			       m.role, m.created_at AS member_created_at, m.expires_at,
+			       a.id AS source_folder_id, a.name AS source_folder_name, a.depth,
+			       ROW_NUMBER() OVER (
+				   PARTITION BY m.user_id
+				   ORDER BY CASE m.role WHEN 'CONTRIBUTOR' THEN 0 ELSE 1 END,
+				            a.depth ASC, m.created_at DESC
+			       ) AS member_rank
+			FROM ancestors a
+			JOIN folder_members m ON m.folder_id = a.id
+			JOIN users u ON u.id = m.user_id
+			WHERE m.expires_at IS NULL OR m.expires_at > now()
+		)
+		SELECT id, firebase_uid, email, display_name, created_at, role, member_created_at, expires_at,
+		       source_folder_id, source_folder_name, depth > 0
+		FROM ranked WHERE member_rank = 1 ORDER BY lower(email)`, folderID, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("list folder members: %w", err)
 	}
@@ -762,7 +805,8 @@ func (p *Postgres) ListFolderMembers(ctx context.Context, ownerID, folderID stri
 	for rows.Next() {
 		var member domain.FolderMember
 		if err := rows.Scan(&member.User.ID, &member.User.FirebaseUID, &member.User.Email, &member.User.DisplayName,
-			&member.User.CreatedAt, &member.Role, &member.CreatedAt); err != nil {
+			&member.User.CreatedAt, &member.Role, &member.CreatedAt, &member.ExpiresAt,
+			&member.SourceFolderID, &member.SourceFolderName, &member.Inherited); err != nil {
 			return nil, fmt.Errorf("scan folder member: %w", err)
 		}
 		result = append(result, member)
@@ -770,14 +814,14 @@ func (p *Postgres) ListFolderMembers(ctx context.Context, ownerID, folderID stri
 	return result, rows.Err()
 }
 
-func (p *Postgres) AddFolderMember(ctx context.Context, ownerID, folderID, email string, createdAt time.Time) (domain.FolderMember, error) {
+func (p *Postgres) AddFolderMember(ctx context.Context, ownerID, folderID, email string, role domain.FolderRole, createdAt time.Time) (domain.FolderMember, error) {
 	var member domain.FolderMember
 	err := p.pool.QueryRow(ctx, `
-		INSERT INTO folder_members (folder_id, user_id, role, created_at)
-		SELECT f.id, u.id, 'VIEWER', $4 FROM folders f JOIN users u ON lower(u.email) = lower($3)
+		INSERT INTO folder_members (folder_id, user_id, role, created_at, expires_at, invite_id)
+		SELECT f.id, u.id, $4, $5, NULL, NULL FROM folders f JOIN users u ON lower(u.email) = lower($3)
 		WHERE f.id = $1 AND f.owner_id = $2 AND u.id <> $2
-		ON CONFLICT (folder_id, user_id) DO UPDATE SET role = 'VIEWER'
-		RETURNING user_id, role, created_at`, folderID, ownerID, email, createdAt).
+		ON CONFLICT (folder_id, user_id) DO UPDATE SET role = EXCLUDED.role, expires_at = NULL, invite_id = NULL
+		RETURNING user_id, role, created_at`, folderID, ownerID, email, role, createdAt).
 		Scan(&member.User.ID, &member.Role, &member.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.FolderMember{}, domain.ErrNotFound
@@ -790,11 +834,179 @@ func (p *Postgres) AddFolderMember(ctx context.Context, ownerID, folderID, email
 }
 
 func (p *Postgres) RemoveFolderMember(ctx context.Context, ownerID, folderID, userID string) error {
-	tag, err := p.pool.Exec(ctx, `
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin remove folder member: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		WITH RECURSIVE descendants AS (
+			SELECT id FROM folders WHERE id = $1 AND owner_id = $3
+			UNION ALL SELECT f.id FROM folders f JOIN descendants d ON f.parent_folder_id = d.id
+		)
+		UPDATE files SET folder_id = NULL WHERE owner_id = $2 AND folder_id IN (SELECT id FROM descendants)`,
+		folderID, userID, ownerID); err != nil {
+		return fmt.Errorf("return member files to library: %w", err)
+	}
+	tag, err := tx.Exec(ctx, `
 		DELETE FROM folder_members m USING folders f
 		WHERE m.folder_id = $1 AND m.user_id = $2 AND f.id = m.folder_id AND f.owner_id = $3`, folderID, userID, ownerID)
 	if err != nil {
 		return fmt.Errorf("remove folder member: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit remove folder member: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) CreateFolderInvite(ctx context.Context, ownerID string, invite domain.FolderInvite) error {
+	tag, err := p.pool.Exec(ctx, `
+		INSERT INTO folder_invites (id, folder_id, created_by, short_code, role, expires_at, created_at)
+		SELECT $1, f.id, $2, $3, $4, $5, $6 FROM folders f WHERE f.id = $7 AND f.owner_id = $2`,
+		invite.ID, ownerID, invite.ShortCode, invite.Role, invite.ExpiresAt, invite.CreatedAt, invite.FolderID)
+	if databaseConflict(err) {
+		return domain.ErrConflict
+	}
+	if err != nil {
+		return fmt.Errorf("create folder invite: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+func (p *Postgres) ListFolderInvites(ctx context.Context, ownerID, folderID string, now time.Time) ([]domain.FolderInvite, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT i.id, i.folder_id, i.created_by, i.short_code, i.role, i.created_at, i.expires_at, i.revoked_at
+		FROM folder_invites i JOIN folders f ON f.id = i.folder_id
+		WHERE i.folder_id = $1 AND f.owner_id = $2 AND i.revoked_at IS NULL
+		  AND (i.expires_at IS NULL OR i.expires_at > $3)
+		ORDER BY i.created_at DESC`, folderID, ownerID, now)
+	if err != nil {
+		return nil, fmt.Errorf("list folder invites: %w", err)
+	}
+	defer rows.Close()
+	result := make([]domain.FolderInvite, 0)
+	for rows.Next() {
+		var invite domain.FolderInvite
+		if err := rows.Scan(&invite.ID, &invite.FolderID, &invite.CreatedBy, &invite.ShortCode, &invite.Role,
+			&invite.CreatedAt, &invite.ExpiresAt, &invite.RevokedAt); err != nil {
+			return nil, fmt.Errorf("scan folder invite: %w", err)
+		}
+		result = append(result, invite)
+	}
+	return result, rows.Err()
+}
+
+func (p *Postgres) RevokeFolderInvite(ctx context.Context, ownerID, folderID, inviteID string, now time.Time) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin revoke folder invite: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `
+		UPDATE folder_invites i SET revoked_at = $4 FROM folders f
+		WHERE i.id = $1 AND i.folder_id = $2 AND f.id = i.folder_id AND f.owner_id = $3 AND i.revoked_at IS NULL`,
+		inviteID, folderID, ownerID, now)
+	if err != nil {
+		return fmt.Errorf("revoke folder invite: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit revoke folder invite: %w", err)
+	}
+	return nil
+}
+
+func (p *Postgres) GetFolderInvitePreview(ctx context.Context, shortCode string, now time.Time) (domain.FolderInvitePreview, error) {
+	var preview domain.FolderInvitePreview
+	var revokedAt *time.Time
+	err := p.pool.QueryRow(ctx, `
+		SELECT f.name, COALESCE(NULLIF(BTRIM(u.display_name), ''), 'An Eterealink user'), i.role, i.expires_at, i.revoked_at
+		FROM folder_invites i
+		JOIN folders f ON f.id = i.folder_id
+		JOIN users u ON u.id = f.owner_id
+		WHERE i.short_code = $1`, shortCode).
+		Scan(&preview.FolderName, &preview.OwnerName, &preview.Role, &preview.ExpiresAt, &revokedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.FolderInvitePreview{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.FolderInvitePreview{}, fmt.Errorf("get folder invite preview: %w", err)
+	}
+	if revokedAt != nil {
+		return domain.FolderInvitePreview{}, domain.ErrRevoked
+	}
+	if preview.ExpiresAt != nil && !preview.ExpiresAt.After(now) {
+		return domain.FolderInvitePreview{}, domain.ErrExpired
+	}
+	return preview, nil
+}
+
+func (p *Postgres) AcceptFolderInvite(ctx context.Context, userID, shortCode string, now time.Time) (domain.FolderAccess, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return domain.FolderAccess{}, fmt.Errorf("begin accept folder invite: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var invite domain.FolderInvite
+	var folder domain.Folder
+	var owner domain.User
+	err = tx.QueryRow(ctx, `
+		SELECT i.id, i.folder_id, i.created_by, i.short_code, i.role, i.created_at, i.expires_at, i.revoked_at,
+		       f.id, f.owner_id, f.parent_folder_id, f.name, f.created_at,
+		       u.id, u.firebase_uid, u.email, u.display_name, u.created_at
+		FROM folder_invites i JOIN folders f ON f.id = i.folder_id JOIN users u ON u.id = f.owner_id
+		WHERE i.short_code = $1 FOR UPDATE OF i`, shortCode).Scan(
+		&invite.ID, &invite.FolderID, &invite.CreatedBy, &invite.ShortCode, &invite.Role, &invite.CreatedAt, &invite.ExpiresAt, &invite.RevokedAt,
+		&folder.ID, &folder.OwnerID, &folder.ParentFolderID, &folder.Name, &folder.CreatedAt,
+		&owner.ID, &owner.FirebaseUID, &owner.Email, &owner.DisplayName, &owner.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.FolderAccess{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.FolderAccess{}, fmt.Errorf("get folder invite: %w", err)
+	}
+	if invite.RevokedAt != nil {
+		return domain.FolderAccess{}, domain.ErrRevoked
+	}
+	if invite.ExpiresAt != nil && !invite.ExpiresAt.After(now) {
+		return domain.FolderAccess{}, domain.ErrExpired
+	}
+	if folder.OwnerID == userID {
+		return domain.FolderAccess{Folder: folder, Role: domain.FolderRoleOwner, Owner: owner}, nil
+	}
+	var effectiveRole domain.FolderRole
+	err = tx.QueryRow(ctx, `
+		INSERT INTO folder_members (folder_id, user_id, role, created_at, expires_at, invite_id)
+		VALUES ($1, $2, $3, $4, NULL, NULL)
+		ON CONFLICT (folder_id, user_id) DO UPDATE SET
+		  role = CASE WHEN folder_members.role = 'CONTRIBUTOR' OR EXCLUDED.role = 'CONTRIBUTOR' THEN 'CONTRIBUTOR' ELSE 'VIEWER' END,
+		  expires_at = NULL, invite_id = NULL
+		RETURNING role`, folder.ID, userID, invite.Role, now).Scan(&effectiveRole)
+	if err != nil {
+		return domain.FolderAccess{}, fmt.Errorf("accept folder invite: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return domain.FolderAccess{}, fmt.Errorf("commit folder invite: %w", err)
+	}
+	return domain.FolderAccess{Folder: folder, Role: effectiveRole, Owner: owner}, nil
+}
+
+func (p *Postgres) RemoveContributedFile(ctx context.Context, folderOwnerID, folderID, fileID string) error {
+	tag, err := p.pool.Exec(ctx, `
+		UPDATE files x SET folder_id = NULL FROM folders f
+		WHERE x.id = $1 AND x.folder_id = $2 AND x.owner_id <> $3
+		  AND f.id = x.folder_id AND f.owner_id = $3`, fileID, folderID, folderOwnerID)
+	if err != nil {
+		return fmt.Errorf("remove contributed file: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound
@@ -809,11 +1021,19 @@ func (p *Postgres) MoveOwnedFiles(ctx context.Context, ownerID string, fileIDs [
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if folderID != nil {
-		var owns bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM folders WHERE id = $1 AND owner_id = $2)`, folderID, ownerID).Scan(&owns); err != nil {
+		var mayContribute bool
+		if err := tx.QueryRow(ctx, `
+			WITH RECURSIVE ancestors AS (
+				SELECT id, owner_id, parent_folder_id FROM folders WHERE id = $1
+				UNION ALL SELECT f.id, f.owner_id, f.parent_folder_id FROM folders f JOIN ancestors a ON a.parent_folder_id = f.id
+			)
+			SELECT EXISTS (SELECT 1 FROM ancestors WHERE owner_id = $2) OR EXISTS (
+				SELECT 1 FROM folder_members m JOIN ancestors a ON a.id = m.folder_id
+				WHERE m.user_id = $2 AND m.role = 'CONTRIBUTOR' AND (m.expires_at IS NULL OR m.expires_at > now())
+			)`, folderID, ownerID).Scan(&mayContribute); err != nil {
 			return fmt.Errorf("validate move destination: %w", err)
 		}
-		if !owns {
+		if !mayContribute {
 			return domain.ErrNotFound
 		}
 	}
@@ -843,7 +1063,8 @@ func (p *Postgres) GetAccessibleFile(ctx context.Context, userID, fileID string)
 		       f.size_bytes, f.upload_status, f.created_at, f.completed_at, f.expires_at
 		FROM files f WHERE f.id = $1 AND (f.owner_id = $2 OR EXISTS (
 			SELECT 1 FROM folder_members m JOIN ancestors a ON a.id = m.folder_id WHERE m.user_id = $2
-		))`, fileID, userID))
+			  AND (m.expires_at IS NULL OR m.expires_at > $3)
+		))`, fileID, userID, time.Now().UTC()))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.File{}, domain.ErrNotFound
 	}

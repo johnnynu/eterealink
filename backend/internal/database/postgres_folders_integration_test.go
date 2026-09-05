@@ -10,7 +10,7 @@ import (
 	"github.com/eterealink/eterealink/backend/internal/domain"
 )
 
-func TestPostgresFolderOwnershipAndInheritedViewerAccess(t *testing.T) {
+func TestPostgresFolderOwnershipInvitesAndContributorAccess(t *testing.T) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("DATABASE_URL is not set")
@@ -68,16 +68,22 @@ func TestPostgresFolderOwnershipAndInheritedViewerAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	member, err := database.AddFolderMember(ctx, owner.ID, root.ID, viewer.Email, now)
+	member, err := database.AddFolderMember(ctx, owner.ID, root.ID, viewer.Email, domain.FolderRoleViewer, now)
 	if err != nil || member.User.ID != viewer.ID {
 		t.Fatalf("member = %#v, error = %v", member, err)
+	}
+	inheritedMembers, err := database.ListFolderMembers(ctx, owner.ID, child.ID)
+	if err != nil || len(inheritedMembers) != 1 || inheritedMembers[0].User.ID != viewer.ID ||
+		inheritedMembers[0].Role != domain.FolderRoleViewer || !inheritedMembers[0].Inherited ||
+		inheritedMembers[0].SourceFolderID != root.ID || inheritedMembers[0].SourceFolderName != root.Name {
+		t.Fatalf("inherited child members = %#v, error = %v", inheritedMembers, err)
 	}
 	shared, _, err := database.GetRootContents(ctx, viewer.ID, "shared", now, domain.FileLibraryQuery{Sort: "newest", Limit: 10})
 	if err != nil || len(shared.Folders) != 1 || shared.Folders[0].Role != domain.FolderRoleViewer {
 		t.Fatalf("shared root = %#v, error = %v", shared, err)
 	}
 	contents, _, err := database.GetFolderContents(ctx, viewer.ID, child.ID, now, domain.FileLibraryQuery{Sort: "newest", Limit: 10})
-	if err != nil || contents.Current == nil || contents.Current.Role != domain.FolderRoleViewer || len(contents.Files) != 2 {
+	if err != nil || contents.Current == nil || contents.Current.Role != domain.FolderRoleViewer || len(contents.Files) != 2 || contents.Files[0].UploaderName != owner.DisplayName {
 		t.Fatalf("viewer contents = %#v, error = %v", contents, err)
 	}
 	firstPage, hasMore, err := database.GetFolderContents(ctx, owner.ID, child.ID, now, domain.FileLibraryQuery{Sort: "newest", Limit: 1})
@@ -100,6 +106,116 @@ func TestPostgresFolderOwnershipAndInheritedViewerAccess(t *testing.T) {
 	}
 	if _, err := database.GetAccessibleFile(ctx, viewer.ID, file.ID); err != nil {
 		t.Fatalf("viewer file access: %v", err)
+	}
+	inviteExpiry := now.Add(7 * 24 * time.Hour)
+	invite := domain.FolderInvite{
+		ID: "94000000-0000-4000-8000-000000000001", FolderID: root.ID, CreatedBy: owner.ID,
+		ShortCode: "phase5contributor", Role: domain.FolderRoleContributor, ExpiresAt: &inviteExpiry, CreatedAt: now,
+	}
+	if err := database.CreateFolderInvite(ctx, owner.ID, invite); err != nil {
+		t.Fatalf("create contributor invite: %v", err)
+	}
+	preview, err := database.GetFolderInvitePreview(ctx, invite.ShortCode, now)
+	if err != nil || preview.FolderName != root.Name || preview.OwnerName != owner.DisplayName || preview.Role != domain.FolderRoleContributor {
+		t.Fatalf("invite preview = %#v, error = %v", preview, err)
+	}
+	invites, err := database.ListFolderInvites(ctx, owner.ID, root.ID, now)
+	if err != nil || len(invites) != 1 || invites[0].Role != domain.FolderRoleContributor {
+		t.Fatalf("active invites = %#v, error = %v", invites, err)
+	}
+	access, err := database.AcceptFolderInvite(ctx, viewer.ID, invite.ShortCode, now)
+	if err != nil || access.Role != domain.FolderRoleContributor {
+		t.Fatalf("accepted access = %#v, error = %v", access, err)
+	}
+	inheritedMembers, err = database.ListFolderMembers(ctx, owner.ID, child.ID)
+	if err != nil || len(inheritedMembers) != 1 || inheritedMembers[0].Role != domain.FolderRoleContributor ||
+		!inheritedMembers[0].Inherited || inheritedMembers[0].SourceFolderID != root.ID {
+		t.Fatalf("upgraded inherited child members = %#v, error = %v", inheritedMembers, err)
+	}
+	viewerInvite := domain.FolderInvite{
+		ID: "94000000-0000-4000-8000-000000000004", FolderID: root.ID, CreatedBy: owner.ID,
+		ShortCode: "phase5viewer", Role: domain.FolderRoleViewer, ExpiresAt: &inviteExpiry, CreatedAt: now,
+	}
+	if err := database.CreateFolderInvite(ctx, owner.ID, viewerInvite); err != nil {
+		t.Fatal(err)
+	}
+	access, err = database.AcceptFolderInvite(ctx, viewer.ID, viewerInvite.ShortCode, now)
+	if err != nil || access.Role != domain.FolderRoleContributor {
+		t.Fatalf("viewer invite downgraded contributor: access = %#v, error = %v", access, err)
+	}
+	shared, _, err = database.GetRootContents(ctx, viewer.ID, "shared", now, domain.FileLibraryQuery{Sort: "newest", Limit: 10})
+	if err != nil || len(shared.Folders) != 1 || shared.Folders[0].Role != domain.FolderRoleContributor {
+		t.Fatalf("contributor shared root = %#v, error = %v", shared, err)
+	}
+
+	expiredAt := now.Add(-time.Minute)
+	expiredInvite := domain.FolderInvite{
+		ID: "94000000-0000-4000-8000-000000000002", FolderID: root.ID, CreatedBy: owner.ID,
+		ShortCode: "phase5expired", Role: domain.FolderRoleViewer, ExpiresAt: &expiredAt, CreatedAt: now.Add(-time.Hour),
+	}
+	if err := database.CreateFolderInvite(ctx, owner.ID, expiredInvite); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.AcceptFolderInvite(ctx, viewer.ID, expiredInvite.ShortCode, now); !errors.Is(err, domain.ErrExpired) {
+		t.Fatalf("expired invite error = %v", err)
+	}
+	if _, err := database.GetFolderInvitePreview(ctx, expiredInvite.ShortCode, now); !errors.Is(err, domain.ErrExpired) {
+		t.Fatalf("expired preview error = %v", err)
+	}
+	revokedInvite := domain.FolderInvite{
+		ID: "94000000-0000-4000-8000-000000000003", FolderID: root.ID, CreatedBy: owner.ID,
+		ShortCode: "phase5revoked", Role: domain.FolderRoleViewer, ExpiresAt: &inviteExpiry, CreatedAt: now,
+	}
+	if err := database.CreateFolderInvite(ctx, owner.ID, revokedInvite); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RevokeFolderInvite(ctx, owner.ID, root.ID, revokedInvite.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.AcceptFolderInvite(ctx, viewer.ID, revokedInvite.ShortCode, now); !errors.Is(err, domain.ErrRevoked) {
+		t.Fatalf("revoked invite error = %v", err)
+	}
+	if _, err := database.GetFolderInvitePreview(ctx, revokedInvite.ShortCode, now); !errors.Is(err, domain.ErrRevoked) {
+		t.Fatalf("revoked preview error = %v", err)
+	}
+
+	contributedFile := domain.File{
+		ID: "93000000-0000-4000-8000-000000000004", OwnerID: &viewer.ID, FolderID: &childID,
+		StorageKey: "phase5-test/contributed", OriginalName: "feedback.txt", MIMEType: "text/plain", SizeBytes: 4,
+		Status: domain.FileStatusPending, CreatedAt: now.Add(time.Minute),
+	}
+	if err := database.CreateOwnedFileWithinQuota(ctx, contributedFile, 100); err != nil {
+		t.Fatalf("contributor upload: %v", err)
+	}
+	if _, err := database.CompleteOwnedFile(ctx, viewer.ID, contributedFile.ID, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	ownerContents, _, err := database.GetFolderContents(ctx, owner.ID, child.ID, now.Add(time.Minute), domain.FileLibraryQuery{Sort: "newest", Limit: 10})
+	if err != nil || len(ownerContents.Files) != 3 || ownerContents.Files[0].File.OwnerID == nil || *ownerContents.Files[0].File.OwnerID != viewer.ID || ownerContents.Files[0].UploaderName != viewer.DisplayName {
+		t.Fatalf("mixed-owner contents = %#v, error = %v", ownerContents.Files, err)
+	}
+	if err := database.DeleteOwnedFile(ctx, owner.ID, contributedFile.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("owner deleting contributor file error = %v", err)
+	}
+	if err := database.RemoveContributedFile(ctx, owner.ID, child.ID, contributedFile.ID); err != nil {
+		t.Fatalf("remove contribution: %v", err)
+	}
+	viewerRoot, _, err := database.GetRootContents(ctx, viewer.ID, "owned", now.Add(time.Minute), domain.FileLibraryQuery{Sort: "newest", Limit: 10})
+	if err != nil || len(viewerRoot.Files) != 1 || viewerRoot.Files[0].File.ID != contributedFile.ID {
+		t.Fatalf("returned contribution = %#v, error = %v", viewerRoot.Files, err)
+	}
+	if err := database.MoveOwnedFiles(ctx, viewer.ID, []string{contributedFile.ID}, &childID); err != nil {
+		t.Fatalf("contributor move into shared child: %v", err)
+	}
+	if err := database.RemoveFolderMember(ctx, owner.ID, root.ID, viewer.ID); err != nil {
+		t.Fatalf("remove contributor: %v", err)
+	}
+	viewerRoot, _, err = database.GetRootContents(ctx, viewer.ID, "owned", now.Add(time.Minute), domain.FileLibraryQuery{Sort: "newest", Limit: 10})
+	if err != nil || len(viewerRoot.Files) != 1 || viewerRoot.Files[0].File.FolderID != nil {
+		t.Fatalf("member removal returned files = %#v, error = %v", viewerRoot.Files, err)
+	}
+	if _, err := database.GetAccessibleFile(ctx, viewer.ID, file.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("removed member file access error = %v", err)
 	}
 	if err := database.MoveOwnedFiles(ctx, owner.ID, []string{file.ID, olderFile.ID}, &root.ID); err != nil {
 		t.Fatalf("move file: %v", err)

@@ -95,9 +95,10 @@ type SharedFile struct {
 }
 
 type OwnedFile struct {
-	File      File       `json:"file"`
-	Share     *ShareLink `json:"share,omitempty"`
-	SharePath string     `json:"sharePath,omitempty"`
+	File         File       `json:"file"`
+	UploaderName string     `json:"uploaderName,omitempty"`
+	Share        *ShareLink `json:"share,omitempty"`
+	SharePath    string     `json:"sharePath,omitempty"`
 }
 
 type FileLibrarySummary struct {
@@ -109,8 +110,9 @@ type FileLibrarySummary struct {
 type FolderRole string
 
 const (
-	FolderRoleOwner  FolderRole = "OWNER"
-	FolderRoleViewer FolderRole = "VIEWER"
+	FolderRoleOwner       FolderRole = "OWNER"
+	FolderRoleContributor FolderRole = "CONTRIBUTOR"
+	FolderRoleViewer      FolderRole = "VIEWER"
 )
 
 type Folder struct {
@@ -128,9 +130,31 @@ type FolderAccess struct {
 }
 
 type FolderMember struct {
-	User      User       `json:"user"`
+	User             User       `json:"user"`
+	Role             FolderRole `json:"role"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	ExpiresAt        *time.Time `json:"expiresAt,omitempty"`
+	Inherited        bool       `json:"inherited"`
+	SourceFolderID   string     `json:"sourceFolderId"`
+	SourceFolderName string     `json:"sourceFolderName"`
+}
+
+type FolderInvite struct {
+	ID        string     `json:"id"`
+	FolderID  string     `json:"folderId"`
+	CreatedBy string     `json:"createdBy"`
+	ShortCode string     `json:"shortCode"`
 	Role      FolderRole `json:"role"`
 	CreatedAt time.Time  `json:"createdAt"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+}
+
+type FolderInvitePreview struct {
+	FolderName string     `json:"folderName"`
+	OwnerName  string     `json:"ownerName"`
+	Role       FolderRole `json:"role"`
+	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
 }
 
 type FolderContents struct {

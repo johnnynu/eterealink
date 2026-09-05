@@ -4,25 +4,39 @@ import { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState } from "
 import { useAuth } from "@/components/auth-context";
 import { CopyIcon, DownloadIcon, FileIcon, FolderIcon, LinkIcon, UploadIcon, UsersIcon } from "@/components/icons";
 import {
-	addFolderMember,
+  acceptFolderInvite,
+  addFolderMember,
   APIError,
   completePersistentUpload,
-	createFolder,
+  createFolder,
+  createFolderInvite,
   createPersistentFileShare,
   createPersistentUpload,
   deletePersistentFile,
-	deleteFolder,
+  deleteFolder,
   getPersistentFileDownload,
-	listFolderContents,
-	listFolderMembers,
-	movePersistentFiles,
-	removeFolderMember,
-	updateFolder,
+  listFolderContents,
+  listFolderInvites,
+  listFolderMembers,
+  movePersistentFiles,
+  removeContributedFile,
+  removeFolderMember,
+  revokeFolderInvite,
   revokePersistentFileShare,
+  updateFolder,
   uploadResumable,
 } from "@/lib/api";
 import { formatBytes, formatExpiry, formatFileType, formatRelativeDate } from "@/lib/format";
-import type { FileLibrarySummary, FileRecord, FolderAccess, FolderMember, FolderRecord, OwnedFileRecord, PersistentShareExpiration } from "@/lib/types";
+import type {
+  FileLibrarySummary,
+  FileRecord,
+  FolderAccess,
+  FolderInvite,
+  FolderMember,
+  FolderRecord,
+  OwnedFileRecord,
+  PersistentShareExpiration,
+} from "@/lib/types";
 
 const MAX_FILE_BYTES = Number(process.env.NEXT_PUBLIC_MAX_PERSISTENT_FILE_BYTES ?? 5 * 1024 ** 3);
 const MAX_FILES_PER_SELECTION = 10;
@@ -44,7 +58,7 @@ function errorMessage(error: unknown, fallback: string) {
 }
 
 export function PersistentFileLibrary() {
-  const { getIDToken } = useAuth();
+  const { getIDToken, user } = useAuth();
   const [files, setFiles] = useState<OwnedFileRecord[] | null>(null);
   const [summary, setSummary] = useState<FileLibrarySummary | null>(null);
   const [error, setError] = useState("");
@@ -72,7 +86,12 @@ export function PersistentFileLibrary() {
 	const [creatingFolder, setCreatingFolder] = useState(false);
 	const [selectedIDs, setSelectedIDs] = useState<string[]>([]);
 	const [memberEmail, setMemberEmail] = useState("");
+	const [memberRole, setMemberRole] = useState<"VIEWER" | "CONTRIBUTOR">("VIEWER");
 	const [members, setMembers] = useState<FolderMember[]>([]);
+	const [folderInvites, setFolderInvites] = useState<FolderInvite[]>([]);
+	const [inviteRole, setInviteRole] = useState<"VIEWER" | "CONTRIBUTOR">("VIEWER");
+	const [inviteExpiration, setInviteExpiration] = useState<PersistentShareExpiration>("7d");
+	const [copiedInviteID, setCopiedInviteID] = useState("");
 	const [sharingFolder, setSharingFolder] = useState(false);
 	const [memberPanelOpen, setMemberPanelOpen] = useState(false);
 	const [editFolderName, setEditFolderName] = useState("");
@@ -82,18 +101,54 @@ export function PersistentFileLibrary() {
 	const activeUpload = useRef<{ id: string; abort: () => void } | null>(null);
 	const uploadSequence = useRef(0);
 	const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const canUpload = scope === "owned" || (scope === "shared" && currentFolder?.role === "CONTRIBUTOR");
 
   useEffect(() => {
     let active = true;
     (async () => {
       try {
         const token = await getIDToken();
-		const result = await listFolderContents(token, undefined, "owned", { sort: "newest", limit: FILES_PER_PAGE });
+		let result;
+		let initialScope: LibraryScope = "owned";
+		let inviteError = "";
+		const initialParameters = new URLSearchParams(window.location.search);
+		const inviteCode = initialParameters.get("folderInvite");
+		const openFolderID = initialParameters.get("openFolder");
+		if (inviteCode) {
+			try {
+				const access = await acceptFolderInvite(inviteCode, token);
+				result = await listFolderContents(token, access.folder.id, "shared", { sort: "newest", limit: FILES_PER_PAGE });
+				initialScope = "shared";
+				const cleanURL = new URL(window.location.href);
+				cleanURL.searchParams.delete("folderInvite");
+				window.history.replaceState({}, "", `${cleanURL.pathname}${cleanURL.search}${cleanURL.hash}`);
+			} catch (inviteFailure) {
+				inviteError = errorMessage(inviteFailure, "This folder invite could not be accepted.");
+			}
+		}
+		if (!result && openFolderID) {
+			try {
+				const requestedScope: LibraryScope = initialParameters.get("scope") === "shared" ? "shared" : "owned";
+				result = await listFolderContents(token, openFolderID, requestedScope, { sort: "newest", limit: FILES_PER_PAGE });
+				initialScope = requestedScope;
+				const cleanURL = new URL(window.location.href);
+				cleanURL.searchParams.delete("openFolder");
+				cleanURL.searchParams.delete("scope");
+				window.history.replaceState({}, "", `${cleanURL.pathname}${cleanURL.search}${cleanURL.hash}`);
+			} catch (folderFailure) {
+				inviteError = errorMessage(folderFailure, "The shared folder could not be opened.");
+			}
+		}
+		if (!result) result = await listFolderContents(token, undefined, "owned", { sort: "newest", limit: FILES_PER_PAGE });
         if (active) {
           setFiles(result.files);
 			setFolders(result.folders);
 			setBreadcrumbs(result.breadcrumbs);
+			setCurrentFolder(result.current ?? null);
+			setEditFolderName(result.current?.folder.name ?? "");
+			setScope(initialScope);
 			setNextCursor(result.nextCursor ?? "");
+			setError(inviteError);
           setSummary(result.summary ?? {
             fileCount: result.files.length,
             totalBytes: result.files.reduce((total, entry) => total + entry.file.sizeBytes, 0),
@@ -112,6 +167,15 @@ export function PersistentFileLibrary() {
 		if (searchTimer.current) clearTimeout(searchTimer.current);
 	};
   }, [getIDToken]);
+
+	useEffect(() => {
+		if (!memberPanelOpen) return;
+		function closeOnEscape(event: KeyboardEvent) {
+			if (event.key === "Escape") setMemberPanelOpen(false);
+		}
+		window.addEventListener("keydown", closeOnEscape);
+		return () => window.removeEventListener("keydown", closeOnEscape);
+	}, [memberPanelOpen]);
 
 	async function openLocation(
 		folderID?: string,
@@ -145,6 +209,8 @@ export function PersistentFileLibrary() {
 			setSummary(result.summary ?? { fileCount: 0, totalBytes: 0 });
 			setNextCursor(result.nextCursor ?? "");
 			setMembers([]);
+			setFolderInvites([]);
+			setCopiedInviteID("");
 			setMemberPanelOpen(false);
 			if (resetCursor) {
 				setPage(1);
@@ -197,7 +263,7 @@ export function PersistentFileLibrary() {
 			const token = await getIDToken();
 			await createFolder(newFolderName, currentFolder?.folder.id, token);
 			setNewFolderName("");
-			await openLocation(currentFolder?.folder.id, "owned");
+			await openLocation(currentFolder?.folder.id, scope);
 		} catch (folderError) {
 			setError(errorMessage(folderError, "The folder could not be created."));
 		} finally {
@@ -240,15 +306,24 @@ export function PersistentFileLibrary() {
 		}
 	}
 
-	async function loadMembers() {
+	async function toggleMembers() {
 		if (!currentFolder) return;
+		if (memberPanelOpen) {
+			setMemberPanelOpen(false);
+			return;
+		}
 		setMemberPanelOpen(true);
 		setSharingFolder(true);
 		try {
 			const token = await getIDToken();
-			setMembers(await listFolderMembers(currentFolder.folder.id, token));
+			const [nextMembers, nextInvites] = await Promise.all([
+				listFolderMembers(currentFolder.folder.id, token),
+				listFolderInvites(currentFolder.folder.id, token),
+			]);
+			setMembers(nextMembers);
+			setFolderInvites(nextInvites);
 		} catch (memberError) {
-			setError(errorMessage(memberError, "Folder viewers could not be loaded."));
+			setError(errorMessage(memberError, "Folder access could not be loaded."));
 		} finally {
 			setSharingFolder(false);
 		}
@@ -261,11 +336,11 @@ export function PersistentFileLibrary() {
 		setError("");
 		try {
 			const token = await getIDToken();
-			const member = await addFolderMember(currentFolder.folder.id, memberEmail, token);
+			const member = await addFolderMember(currentFolder.folder.id, memberEmail, memberRole, token);
 			setMembers((current) => [...current.filter((item) => item.user.id !== member.user.id), member]);
 			setMemberEmail("");
 		} catch (memberError) {
-			setError(errorMessage(memberError, "The viewer could not be added. They must sign in to Eterealink first."));
+			setError(errorMessage(memberError, "The member could not be added. They must sign in to Eterealink first."));
 		} finally {
 			setSharingFolder(false);
 		}
@@ -279,14 +354,54 @@ export function PersistentFileLibrary() {
 			await removeFolderMember(currentFolder.folder.id, userID, token);
 			setMembers((current) => current.filter((item) => item.user.id !== userID));
 		} catch (memberError) {
-			setError(errorMessage(memberError, "The viewer could not be removed."));
+			setError(errorMessage(memberError, "The member could not be removed."));
+		} finally {
+			setSharingFolder(false);
+		}
+	}
+
+	async function createInviteLink() {
+		if (!currentFolder) return;
+		setSharingFolder(true);
+		setError("");
+		try {
+			const token = await getIDToken();
+			const result = await createFolderInvite(currentFolder.folder.id, inviteRole, inviteExpiration, token);
+			setFolderInvites((current) => [result.invite, ...current]);
+			await copyInviteLink(result.invite.id, result.invitePath);
+		} catch (inviteError) {
+			setError(errorMessage(inviteError, "The invite link could not be created."));
+		} finally {
+			setSharingFolder(false);
+		}
+	}
+
+	async function copyInviteLink(inviteID: string, invitePath: string) {
+		try {
+			await navigator.clipboard.writeText(absoluteShareURL(invitePath));
+			setCopiedInviteID(inviteID);
+			window.setTimeout(() => setCopiedInviteID((current) => current === inviteID ? "" : current), 1800);
+		} catch {
+			setError("The invite link could not be copied. Select it and copy it manually.");
+		}
+	}
+
+	async function revokeInvite(inviteID: string) {
+		if (!currentFolder) return;
+		setSharingFolder(true);
+		try {
+			const token = await getIDToken();
+			await revokeFolderInvite(currentFolder.folder.id, inviteID, token);
+			setFolderInvites((current) => current.filter((invite) => invite.id !== inviteID));
+		} catch (inviteError) {
+			setError(errorMessage(inviteError, "The invite link could not be revoked."));
 		} finally {
 			setSharingFolder(false);
 		}
 	}
 
   async function uploadSelectedFiles(selected: File[]) {
-	if (scope !== "owned" || selected.length === 0 || uploading) return;
+	if (!canUpload || selected.length === 0 || uploading) return;
     if (selected.length > MAX_FILES_PER_SELECTION) {
       setError(`Choose no more than ${MAX_FILES_PER_SELECTION} files at once.`);
       return;
@@ -403,6 +518,22 @@ export function PersistentFileLibrary() {
     }
   }
 
+	async function removeFileFromFolder(fileID: string) {
+		if (!currentFolder) return;
+		setDeletingID(fileID);
+		setError("");
+		try {
+			const token = await getIDToken();
+			await removeContributedFile(currentFolder.folder.id, fileID, token);
+			setFiles((current) => current?.filter((entry) => entry.file.id !== fileID) ?? []);
+			setConfirmDeleteID("");
+		} catch (removeError) {
+			setError(errorMessage(removeError, "The file could not be removed from this folder."));
+		} finally {
+			setDeletingID("");
+		}
+	}
+
   function absoluteShareURL(path: string) {
     if (typeof window === "undefined") return path;
     return new URL(path, window.location.origin).toString();
@@ -453,6 +584,9 @@ export function PersistentFileLibrary() {
   }
 
   const visibleFiles = files ?? [];
+  const showUploaderAttribution = Boolean(currentFolder && (
+	scope === "shared" || visibleFiles.some((entry) => entry.file.ownerId && entry.file.ownerId !== user?.id)
+  ));
   const pageStart = (page - 1) * FILES_PER_PAGE;
 
   function resetLibraryView() {
@@ -488,9 +622,9 @@ export function PersistentFileLibrary() {
   return (
     <div
       className={`library-content ${dragging ? "is-dragging" : ""}`}
-      onDragEnter={(event) => {
+			onDragEnter={(event) => {
         event.preventDefault();
-		if (scope === "owned" && !uploading && event.dataTransfer.types.includes("Files")) setDragging(true);
+		if (canUpload && !uploading && event.dataTransfer.types.includes("Files")) setDragging(true);
       }}
       onDragOver={(event) => event.preventDefault()}
       onDragLeave={(event) => {
@@ -521,6 +655,7 @@ export function PersistentFileLibrary() {
           <p className="eyebrow">Library</p>
 			<h2 id="library-title">{currentFolder?.folder.name ?? (scope === "shared" ? "Shared with you" : "Your files")}</h2>
 			{currentFolder?.role === "VIEWER" && <p className="viewer-note">Read-only · Shared by {currentFolder.owner.displayName || currentFolder.owner.email}</p>}
+			{currentFolder?.role === "CONTRIBUTOR" && <p className="viewer-note contributor-note">Contributor · You can upload and manage your own files</p>}
           <p className="library-summary" aria-live="polite">
             {summary === null
               ? "Loading storage usage…"
@@ -528,7 +663,7 @@ export function PersistentFileLibrary() {
           </p>
 		  {summary?.quotaBytes ? <div className="storage-capacity" title={`${formatBytes(summary.totalBytes)} of ${formatBytes(summary.quotaBytes)}`}><span style={{ width: `${Math.min(100, (summary.totalBytes / summary.quotaBytes) * 100)}%` }} /></div> : null}
         </div>
-		{scope === "owned" && <label className={`primary-button library-upload-button ${uploading ? "is-disabled" : ""}`} htmlFor="owned-files-input">
+		{canUpload && <label className={`primary-button library-upload-button ${uploading ? "is-disabled" : ""}`} htmlFor="owned-files-input">
           <UploadIcon /> {uploading ? "Uploading…" : "Upload files"}
 		</label>}
         <input
@@ -570,15 +705,75 @@ export function PersistentFileLibrary() {
 					<input id="new-folder-name" value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} placeholder="New folder name" maxLength={255} />
 					<button type="submit" disabled={creatingFolder || !newFolderName.trim()}><FolderIcon /> {creatingFolder ? "Creating…" : "New folder"}</button>
 				</form>
-				{currentFolder?.role === "OWNER" && <button type="button" className="manage-viewers" onClick={loadMembers}><UsersIcon /> Manage viewers</button>}
+				{currentFolder?.role === "OWNER" && <button type="button" className="manage-viewers" aria-expanded={memberPanelOpen} onClick={toggleMembers}><UsersIcon /> {memberPanelOpen ? "Close access" : "Manage access"}</button>}
 			</div>
 		)}
 
 		{currentFolder?.role === "OWNER" && memberPanelOpen && (
-			<div className="folder-sharing-panel">
-				<div><strong>Read-only viewers</strong><p>Viewers can browse and download this folder and its subfolders.</p></div>
-				<form onSubmit={inviteMember}><input type="email" required placeholder="viewer@example.com" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} /><button disabled={sharingFolder}>Add viewer</button></form>
-				{members.map((member) => <div className="folder-member" key={member.user.id}><span><strong>{member.user.displayName || member.user.email}</strong><small>{member.user.email}</small></span><button type="button" disabled={sharingFolder} onClick={() => revokeMember(member.user.id)}>Remove</button></div>)}
+			<div className="folder-sharing-panel" aria-label="Folder access">
+				<div className="folder-sharing-heading">
+					<div><strong>Folder access</strong><p>Viewers can download. Contributors can also upload and manage only their own files.</p></div>
+					<button type="button" className="close-sharing-panel" onClick={() => setMemberPanelOpen(false)} aria-label="Close folder access">Close</button>
+				</div>
+				<section className="folder-access-section">
+					<div><strong>Add an existing user</strong><p>Use this when you know their Eterealink email.</p></div>
+					<form onSubmit={inviteMember}>
+						<input type="email" required placeholder="person@example.com" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} />
+						<select aria-label="Member role" value={memberRole} onChange={(event) => setMemberRole(event.target.value as "VIEWER" | "CONTRIBUTOR")}>
+							<option value="VIEWER">Viewer</option><option value="CONTRIBUTOR">Contributor</option>
+						</select>
+						<button disabled={sharingFolder}>Add</button>
+					</form>
+				</section>
+				<section className="folder-access-section invite-link-creator">
+					<div><strong>Create an invite link</strong><p>Expiration is the deadline to join. Accepted access remains until you remove the member.</p></div>
+					<div className="invite-link-controls">
+						<select aria-label="Invite role" value={inviteRole} onChange={(event) => setInviteRole(event.target.value as "VIEWER" | "CONTRIBUTOR")}>
+							<option value="VIEWER">Viewer</option><option value="CONTRIBUTOR">Contributor</option>
+						</select>
+						<select aria-label="Invite expiration" value={inviteExpiration} onChange={(event) => setInviteExpiration(event.target.value as PersistentShareExpiration)}>
+							<option value="24h">24 hours</option><option value="7d">7 days</option><option value="30d">30 days</option><option value="never">Never</option>
+						</select>
+						<button type="button" disabled={sharingFolder} onClick={createInviteLink}><LinkIcon /> Create link</button>
+					</div>
+				</section>
+				<details className="folder-invite-list">
+					<summary>Active invite links <span>{folderInvites.length}</span></summary>
+					<div>
+						{folderInvites.length === 0 && <p className="folder-access-empty">There are no active invite links.</p>}
+						{folderInvites.map((invite) => (
+							<div className="folder-invite" key={invite.id}>
+								<span><strong>{invite.role === "CONTRIBUTOR" ? "Contributor" : "Viewer"} invite</strong><small>{invite.expiresAt ? `Join by ${formatExpiry(invite.expiresAt)}` : "No joining deadline"}</small></span>
+								<input aria-label={`${invite.role.toLowerCase()} invite link`} readOnly value={absoluteShareURL(`/join/${invite.shortCode}`)} />
+								<button type="button" onClick={() => copyInviteLink(invite.id, `/join/${invite.shortCode}`)}><CopyIcon /> {copiedInviteID === invite.id ? "Copied" : "Copy"}</button>
+								<button type="button" className="revoke-folder-access" disabled={sharingFolder} onClick={() => revokeInvite(invite.id)}>Revoke</button>
+							</div>
+						))}
+					</div>
+				</details>
+				<section className="folder-member-section">
+					<div><strong>Members ({members.length})</strong><p>People with direct or inherited access to this folder.</p></div>
+					{members.length === 0 && !sharingFolder && <p className="folder-access-empty">No members have joined this folder yet.</p>}
+					{members.length > 0 && <div className="folder-member-list">
+						{members.map((member) => (
+							<div className="folder-member" key={member.user.id}>
+								<span className="folder-member-identity">
+									<strong>{member.user.displayName || member.user.email}</strong>
+									<small className="folder-member-email">{member.user.email}</small>
+									{member.inherited && member.sourceFolderName && <small className="folder-member-source">Inherited from {member.sourceFolderName}</small>}
+								</span>
+								<div className="folder-member-controls">
+									<em>{member.role === "CONTRIBUTOR" ? "Contributor" : "Viewer"}</em>
+									{member.inherited && member.sourceFolderId ? (
+										<button type="button" className="manage-inherited-access" aria-label={`Manage ${member.user.displayName || member.user.email}'s access in ${member.sourceFolderName || "parent folder"}`} onClick={() => openLocation(member.sourceFolderId, "owned")}>Manage source</button>
+									) : (
+										<button type="button" disabled={sharingFolder} onClick={() => revokeMember(member.user.id)}>Remove</button>
+									)}
+								</div>
+							</div>
+						))}
+					</div>}
+				</section>
 			</div>
 		)}
 
@@ -598,13 +793,13 @@ export function PersistentFileLibrary() {
 				{folders.map((access) => (
 					<button type="button" className="folder-card" key={access.folder.id} onClick={() => openLocation(access.folder.id, scope)}>
 						<span><FolderIcon /></span><strong>{access.folder.name}</strong>
-						<small>{access.role === "VIEWER" ? `From ${access.owner.displayName || access.owner.email}` : "Folder"}</small>
+						<small>{access.role === "OWNER" ? "Folder" : `${access.role === "CONTRIBUTOR" ? "Contributor" : "Viewer"} · ${access.owner.displayName || access.owner.email}`}</small>
 					</button>
 				))}
 			</div>
 		)}
 
-		{scope === "owned" && selectedIDs.length > 0 && (
+		{selectedIDs.length > 0 && (
 			<div className="bulk-actions" role="toolbar" aria-label="Selected file actions">
 				<strong>{selectedIDs.length} selected</strong>
 				<label>Move to <select defaultValue="" onChange={(event) => { if (event.target.value === "__root") moveSelected(undefined); else if (event.target.value) moveSelected(event.target.value); event.target.value = ""; }}><option value="">Choose folder</option><option value="__root">My files</option>{folders.map((access) => <option key={access.folder.id} value={access.folder.id}>{access.folder.name}</option>)}</select></label>
@@ -667,13 +862,15 @@ export function PersistentFileLibrary() {
           <span />
         </div>
 		) : files.length === 0 && folders.length === 0 && searchQuery === "" && filter === "all" ? (
-        <div className="library-empty">
+		<div className="library-empty">
           <span className="empty-icon"><FileIcon /></span>
           <div>
-			<h3>{scope === "shared" ? "Nothing has been shared with you." : currentFolder ? "This folder is empty." : "Your library is empty."}</h3>
-			<p>{scope === "shared" ? "Folders shared by other Eterealink users will appear here." : "Upload files you want to keep. They stay private and do not expire."}</p>
+			<h3>{currentFolder ? "This folder is empty." : scope === "shared" ? "Nothing has been shared with you." : "Your library is empty."}</h3>
+			<p>{currentFolder
+				? canUpload ? "Upload files here to share them with everyone who can access this folder." : "There are no files in this shared folder yet."
+				: scope === "shared" ? "Folders shared by other Eterealink users will appear here." : "Upload files you want to keep. They stay private and do not expire."}</p>
           </div>
-		  {scope === "owned" && <label className="secondary-button file-picker-label" htmlFor="owned-files-input">Choose files</label>}
+		  {canUpload && <label className="secondary-button file-picker-label" htmlFor="owned-files-input">Choose files</label>}
         </div>
 		) : visibleFiles.length === 0 ? (
         <div className="library-no-results">
@@ -697,9 +894,11 @@ export function PersistentFileLibrary() {
           {visibleFiles.map((entry) => {
             const file = entry.file;
             const shareIsOpen = openShareID === file.id;
+			const ownsFile = file.ownerId ? file.ownerId === user?.id : scope === "owned";
+			const canRemoveContribution = currentFolder?.role === "OWNER" && !ownsFile;
             return (
             <article className={`owned-file-row ${shareIsOpen ? "share-is-open" : ""}`} key={file.id}>
-			  {scope === "owned" && <input className="file-select" type="checkbox" aria-label={`Select ${file.originalName}`} checked={selectedIDs.includes(file.id)} onChange={(event) => setSelectedIDs((current) => event.target.checked ? [...current, file.id] : current.filter((id) => id !== file.id))} />}
+			  {ownsFile && <input className="file-select" type="checkbox" aria-label={`Select ${file.originalName}`} checked={selectedIDs.includes(file.id)} onChange={(event) => setSelectedIDs((current) => event.target.checked ? [...current, file.id] : current.filter((id) => id !== file.id))} />}
               <span className="owned-file-icon"><FileIcon /></span>
               <span className="owned-file-name">
                 <strong title={file.originalName}>{file.originalName}</strong>
@@ -707,25 +906,26 @@ export function PersistentFileLibrary() {
                   {formatFileType(file.mimeType, file.originalName)}
                   {entry.share && <em>Link active</em>}
                 </span>
+				{showUploaderAttribution && <span className="file-uploader">Uploaded by {ownsFile ? "you" : entry.uploaderName || "another member"}</span>}
               </span>
               <span className="owned-file-meta">{formatBytes(file.sizeBytes)}</span>
               <span className="owned-file-meta" title={formatExpiry(file.completedAt ?? file.createdAt)}>
                 {formatRelativeDate(file.completedAt ?? file.createdAt)}
               </span>
               <span className="owned-file-actions">
-				{scope === "owned" && confirmDeleteID === file.id ? (
+				{(ownsFile || canRemoveContribution) && confirmDeleteID === file.id ? (
                   <>
                     <button type="button" className="row-action" onClick={() => setConfirmDeleteID("")}>Cancel</button>
-                    <button type="button" className="row-action danger" disabled={deletingID === file.id} onClick={() => removeFile(file.id)}>
-                      {deletingID === file.id ? "Deleting…" : "Delete"}
+					<button type="button" className="row-action danger" disabled={deletingID === file.id} onClick={() => ownsFile ? removeFile(file.id) : removeFileFromFolder(file.id)}>
+					  {deletingID === file.id ? "Removing…" : ownsFile ? "Delete permanently" : "Remove from folder"}
                     </button>
                   </>
-				) : scope === "owned" ? (
+				) : (
                   <>
                     <button type="button" className="row-action download" onClick={() => downloadFile(file.id)}>
                       <DownloadIcon /> Download
                     </button>
-                    <button
+					{ownsFile && <button
                       type="button"
                       className={`row-action share ${entry.share ? "is-active" : ""}`}
                       aria-expanded={shareIsOpen}
@@ -736,10 +936,11 @@ export function PersistentFileLibrary() {
                       }}
                     >
                       <LinkIcon /> Share
-                    </button>
-                    <button type="button" className="row-action" onClick={() => setConfirmDeleteID(file.id)}>Delete</button>
+					</button>}
+					{ownsFile && <button type="button" className="row-action" onClick={() => setConfirmDeleteID(file.id)}>Delete</button>}
+					{canRemoveContribution && <button type="button" className="row-action" onClick={() => setConfirmDeleteID(file.id)}>Remove</button>}
                   </>
-				) : <button type="button" className="row-action download" onClick={() => downloadFile(file.id)}><DownloadIcon /> Download</button>}
+				)}
               </span>
               {shareIsOpen && (
                 <div className="file-share-panel">

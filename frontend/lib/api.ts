@@ -8,6 +8,9 @@ import type {
   FileRecord,
 	FolderContents,
 	FolderMember,
+	FolderInvite,
+	FolderInvitePreview,
+	FolderAccess,
 	FolderRecord,
   PersistentShareExpiration,
   ShareResult,
@@ -149,12 +152,46 @@ export async function listFolderMembers(folderID: string, idToken: string): Prom
 	return result.members;
 }
 
-export async function addFolderMember(folderID: string, email: string, idToken: string): Promise<FolderMember> {
+export async function addFolderMember(folderID: string, email: string, role: "VIEWER" | "CONTRIBUTOR", idToken: string): Promise<FolderMember> {
 	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}/members`, {
-		method: "POST", headers: bearerHeaders(idToken, true), body: JSON.stringify({ email }),
+		method: "POST", headers: bearerHeaders(idToken, true), body: JSON.stringify({ email, role }),
 	});
 	const result = await parseResponse<{ member: FolderMember }>(response);
 	return result.member;
+}
+
+export async function createFolderInvite(folderID: string, role: "VIEWER" | "CONTRIBUTOR", expiresIn: PersistentShareExpiration, idToken: string): Promise<{ invite: FolderInvite; invitePath: string }> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}/invites`, {
+		method: "POST", headers: bearerHeaders(idToken, true), body: JSON.stringify({ role, expiresIn }),
+	});
+	return parseResponse(response);
+}
+
+export async function listFolderInvites(folderID: string, idToken: string): Promise<FolderInvite[]> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}/invites`, { headers: bearerHeaders(idToken), cache: "no-store" });
+	const result = await parseResponse<{ invites: FolderInvite[] }>(response);
+	return result.invites;
+}
+
+export async function revokeFolderInvite(folderID: string, inviteID: string, idToken: string): Promise<void> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}/invites/${encodeURIComponent(inviteID)}`, { method: "DELETE", headers: bearerHeaders(idToken) });
+	if (!response.ok) await parseResponse(response);
+}
+
+export async function acceptFolderInvite(code: string, idToken: string): Promise<FolderAccess> {
+	const response = await fetch(`/api/v1/folder-invites/${encodeURIComponent(code)}/accept`, { method: "POST", headers: bearerHeaders(idToken) });
+	return parseResponse(response);
+}
+
+export async function getFolderInvitePreview(code: string): Promise<FolderInvitePreview> {
+	const response = await fetch(`/api/v1/folder-invites/${encodeURIComponent(code)}`, { cache: "no-store" });
+	const result = await parseResponse<{ invite: FolderInvitePreview }>(response);
+	return result.invite;
+}
+
+export async function removeContributedFile(folderID: string, fileID: string, idToken: string): Promise<void> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}/files/${encodeURIComponent(fileID)}`, { method: "DELETE", headers: bearerHeaders(idToken) });
+	if (!response.ok) await parseResponse(response);
 }
 
 export async function removeFolderMember(folderID: string, userID: string, idToken: string): Promise<void> {

@@ -5,25 +5,31 @@ import { PersistentFileLibrary } from "./persistent-file-library";
 import type { FileRecord } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
+	acceptFolderInvite: vi.fn(),
 	addFolderMember: vi.fn(),
   completePersistentUpload: vi.fn(),
 	createFolder: vi.fn(),
+	createFolderInvite: vi.fn(),
   createPersistentFileShare: vi.fn(),
   createPersistentUpload: vi.fn(),
   deletePersistentFile: vi.fn(),
 	deleteFolder: vi.fn(),
   getPersistentFileDownload: vi.fn(),
 	listFolderContents: vi.fn(),
+	listFolderInvites: vi.fn(),
 	listFolderMembers: vi.fn(),
 	movePersistentFiles: vi.fn(),
+	removeContributedFile: vi.fn(),
 	removeFolderMember: vi.fn(),
+	revokeFolderInvite: vi.fn(),
   revokePersistentFileShare: vi.fn(),
   uploadResumable: vi.fn(),
 	updateFolder: vi.fn(),
 }));
 const getIDToken = vi.hoisted(() => vi.fn(async () => "verified-token"));
+const signedInUser = vi.hoisted(() => ({ id: "user-1", email: "me@example.com", displayName: "Me", createdAt: "2026-09-03T12:00:00Z" }));
 
-vi.mock("@/components/auth-context", () => ({ useAuth: () => ({ getIDToken }) }));
+vi.mock("@/components/auth-context", () => ({ useAuth: () => ({ getIDToken, user: signedInUser }) }));
 vi.mock("@/lib/api", () => ({
   APIError: class APIError extends Error {},
   ...api,
@@ -31,6 +37,7 @@ vi.mock("@/lib/api", () => ({
 
 const savedFile: FileRecord = {
   id: "file-1",
+	ownerId: "user-1",
   originalName: "project-notes.txt",
   mimeType: "text/plain",
   sizeBytes: 5,
@@ -40,7 +47,7 @@ const savedFile: FileRecord = {
 };
 const mounted: Array<{ container: HTMLDivElement; unmount: () => void }> = [];
 
-function library(files: Array<{ file: FileRecord; share?: object; sharePath?: string }>) {
+function library(files: Array<{ file: FileRecord; uploaderName?: string; share?: object; sharePath?: string }>) {
   return {
     files,
 	folders: [],
@@ -89,7 +96,7 @@ describe("PersistentFileLibrary", () => {
     act(() => deleteButton?.click());
     expect(api.deletePersistentFile).not.toHaveBeenCalled();
 
-    const confirmButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Delete");
+    const confirmButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Delete permanently");
     await act(async () => { confirmButton?.click(); });
     expect(api.deletePersistentFile).toHaveBeenCalledWith("file-1", "verified-token");
     expect(container.textContent).not.toContain("project-notes.txt");
@@ -267,7 +274,7 @@ describe("PersistentFileLibrary", () => {
 		api.listFolderContents
 			.mockResolvedValueOnce(library([]))
 			.mockResolvedValueOnce({ ...library([]), folders: [sharedFolder] })
-			.mockResolvedValueOnce({ ...library([{ file: savedFile }]), current: sharedFolder, breadcrumbs: [sharedFolder.folder] });
+			.mockResolvedValueOnce({ ...library([{ file: { ...savedFile, ownerId: "owner-1" } }]), current: sharedFolder, breadcrumbs: [sharedFolder.folder] });
 		const container = await renderLibrary();
 		const sharedButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent === "Shared with me");
 		await act(async () => { sharedButton?.click(); });
@@ -276,6 +283,176 @@ describe("PersistentFileLibrary", () => {
 		expect(container.textContent).toContain("Read-only · Shared by Owner");
 		expect(container.textContent).toContain("project-notes.txt");
 		expect(container.textContent).not.toContain("Delete");
+	});
+
+	it("opens and closes folder access management", async () => {
+		const ownedFolder = {
+			folder: { id: "folder-1", ownerId: "user-1", name: "Launch", createdAt: "2026-09-04T12:00:00Z" },
+			role: "OWNER" as const,
+			owner: signedInUser,
+		};
+		api.listFolderContents
+			.mockResolvedValueOnce({ ...library([]), folders: [ownedFolder] })
+			.mockResolvedValueOnce({ ...library([]), current: ownedFolder, breadcrumbs: [ownedFolder.folder] });
+		api.listFolderMembers.mockResolvedValue(Array.from({ length: 12 }, (_, index) => ({
+			user: { id: `member-${index}`, email: `member-${index}@example.com`, displayName: `Member ${index + 1}`, createdAt: "2026-09-04T12:00:00Z" },
+			role: index % 2 === 0 ? "CONTRIBUTOR" : "VIEWER",
+			createdAt: "2026-09-04T12:00:00Z",
+		})));
+		api.listFolderInvites.mockResolvedValue([]);
+		const container = await renderLibrary();
+		const folderButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent?.includes("Launch"));
+		await act(async () => { folderButton?.click(); });
+		const manageButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent?.includes("Manage access"));
+		await act(async () => { manageButton?.click(); });
+		expect(container.querySelector(".folder-sharing-panel")).not.toBeNull();
+		expect(api.listFolderMembers).toHaveBeenCalledWith("folder-1", "verified-token");
+		expect(container.textContent).toContain("Members (12)");
+		expect(container.querySelectorAll(".folder-member-list .folder-member")).toHaveLength(12);
+		const closeButton = container.querySelector<HTMLButtonElement>(".close-sharing-panel");
+		act(() => closeButton?.click());
+		expect(container.querySelector(".folder-sharing-panel")).toBeNull();
+	});
+
+	it("shows inherited members and manages their access from the source folder", async () => {
+		const rootFolder = {
+			folder: { id: "root-folder", ownerId: "user-1", name: "Project", createdAt: "2026-09-04T12:00:00Z" },
+			role: "OWNER" as const,
+			owner: signedInUser,
+		};
+		const childFolder = {
+			folder: { id: "child-folder", ownerId: "user-1", parentFolderId: "root-folder", name: "Plans", createdAt: "2026-09-04T12:01:00Z" },
+			role: "OWNER" as const,
+			owner: signedInUser,
+		};
+		api.listFolderContents
+			.mockResolvedValueOnce({ ...library([]), folders: [childFolder] })
+			.mockResolvedValueOnce({ ...library([]), current: childFolder, breadcrumbs: [rootFolder.folder, childFolder.folder] })
+			.mockResolvedValueOnce({ ...library([]), current: rootFolder, breadcrumbs: [rootFolder.folder], folders: [childFolder] });
+		api.listFolderMembers.mockResolvedValue([{
+			user: { id: "member-1", email: "member@example.com", displayName: "Collaborator", createdAt: "2026-09-04T12:00:00Z" },
+			role: "CONTRIBUTOR",
+			createdAt: "2026-09-04T12:00:00Z",
+			inherited: true,
+			sourceFolderId: "root-folder",
+			sourceFolderName: "Project",
+		}]);
+		api.listFolderInvites.mockResolvedValue([]);
+
+		const container = await renderLibrary();
+		const childButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent?.includes("Plans"));
+		await act(async () => { childButton?.click(); });
+		const manageButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent?.includes("Manage access"));
+		await act(async () => { manageButton?.click(); });
+
+		expect(container.textContent).toContain("Members (1)");
+		expect(container.textContent).toContain("Inherited from Project");
+		expect(container.textContent).not.toContain("Remove");
+		const sourceButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent === "Manage source");
+		expect(sourceButton?.getAttribute("aria-label")).toContain("access in Project");
+		await act(async () => { sourceButton?.click(); });
+
+		expect(api.removeFolderMember).not.toHaveBeenCalled();
+		expect(api.listFolderContents).toHaveBeenLastCalledWith("verified-token", "root-folder", "owned", {
+			search: "",
+			sort: "newest",
+			filter: "all",
+			limit: 10,
+			cursor: "",
+		});
+		expect(container.textContent).toContain("Project");
+		expect(container.querySelector(".folder-sharing-panel")).toBeNull();
+	});
+
+	it("creates a role-aware folder invite link and copies it", async () => {
+		const ownedFolder = {
+			folder: { id: "folder-1", ownerId: "user-1", name: "Launch", createdAt: "2026-09-04T12:00:00Z" },
+			role: "OWNER" as const,
+			owner: signedInUser,
+		};
+		const invite = { id: "invite-1", folderId: "folder-1", shortCode: "joinme", role: "CONTRIBUTOR" as const, createdAt: "2026-09-04T12:00:00Z", expiresAt: "2026-09-11T12:00:00Z" };
+		api.listFolderContents
+			.mockResolvedValueOnce({ ...library([]), folders: [ownedFolder] })
+			.mockResolvedValueOnce({ ...library([]), current: ownedFolder, breadcrumbs: [ownedFolder.folder] });
+		api.listFolderMembers.mockResolvedValue([]);
+		api.listFolderInvites.mockResolvedValue([]);
+		api.createFolderInvite.mockResolvedValue({ invite, invitePath: "/join/joinme" });
+		const writeText = vi.fn().mockResolvedValue(undefined);
+		Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+		const container = await renderLibrary();
+		const folderButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent?.includes("Launch"));
+		await act(async () => { folderButton?.click(); });
+		const manageButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent?.includes("Manage access"));
+		await act(async () => { manageButton?.click(); });
+		const role = container.querySelector<HTMLSelectElement>('select[aria-label="Invite role"]')!;
+		act(() => { role.value = "CONTRIBUTOR"; role.dispatchEvent(new Event("change", { bubbles: true })); });
+		const createLink = Array.from(container.querySelectorAll("button")).find((item) => item.textContent?.includes("Create link"));
+		await act(async () => { createLink?.click(); });
+		expect(api.createFolderInvite).toHaveBeenCalledWith("folder-1", "CONTRIBUTOR", "7d", "verified-token");
+		expect(writeText).toHaveBeenCalledWith("http://localhost:3000/join/joinme");
+		expect(container.textContent).toContain("Contributor invite");
+	});
+
+	it("accepts a folder invite from the workspace URL and opens the shared folder", async () => {
+		const sharedFolder = {
+			folder: { id: "folder-1", ownerId: "owner-1", name: "Launch", createdAt: "2026-09-04T12:00:00Z" },
+			role: "VIEWER" as const,
+			owner: { id: "owner-1", email: "owner@example.com", displayName: "Owner", createdAt: "2026-09-04T12:00:00Z" },
+		};
+		window.history.replaceState({}, "", "/app?folderInvite=joinme");
+		api.acceptFolderInvite.mockResolvedValue(sharedFolder);
+		api.listFolderContents.mockResolvedValue({ ...library([]), current: sharedFolder, breadcrumbs: [sharedFolder.folder] });
+		const container = await renderLibrary();
+		expect(api.acceptFolderInvite).toHaveBeenCalledWith("joinme", "verified-token");
+		expect(container.textContent).toContain("Read-only · Shared by Owner");
+		expect(window.location.search).toBe("");
+	});
+
+	it("opens the folder handed off by the public invitation page", async () => {
+		const sharedFolder = {
+			folder: { id: "folder-1", ownerId: "owner-1", name: "Launch", createdAt: "2026-09-04T12:00:00Z" },
+			role: "VIEWER" as const,
+			owner: { id: "owner-1", email: "owner@example.com", displayName: "Owner", createdAt: "2026-09-04T12:00:00Z" },
+		};
+		window.history.replaceState({}, "", "/app?openFolder=folder-1&scope=shared");
+		api.listFolderContents.mockResolvedValue({ ...library([]), current: sharedFolder, breadcrumbs: [sharedFolder.folder] });
+		const container = await renderLibrary();
+		expect(api.listFolderContents).toHaveBeenCalledWith("verified-token", "folder-1", "shared", { sort: "newest", limit: 10 });
+		expect(container.textContent).toContain("Read-only · Shared by Owner");
+		expect(window.location.search).toBe("");
+	});
+
+	it("lets contributors upload and manage only their own shared-folder files", async () => {
+		const sharedFolder = {
+			folder: { id: "folder-1", ownerId: "owner-1", name: "Launch", createdAt: "2026-09-04T12:00:00Z" },
+			role: "CONTRIBUTOR" as const,
+			owner: { id: "owner-1", email: "owner@example.com", displayName: "Owner", createdAt: "2026-09-04T12:00:00Z" },
+		};
+		const ownFile = { ...savedFile, id: "mine", originalName: "mine.txt" };
+		const ownerFile = { ...savedFile, id: "theirs", ownerId: "owner-1", originalName: "theirs.txt" };
+		api.listFolderContents
+			.mockResolvedValueOnce(library([]))
+			.mockResolvedValueOnce({ ...library([]), folders: [sharedFolder] })
+			.mockResolvedValueOnce({ ...library([{ file: ownFile, uploaderName: "Me" }, { file: ownerFile, uploaderName: "Owner" }]), current: sharedFolder, breadcrumbs: [sharedFolder.folder] })
+			.mockResolvedValueOnce({ ...library([{ file: ownFile, uploaderName: "Me" }, { file: ownerFile, uploaderName: "Owner" }]), current: sharedFolder, breadcrumbs: [sharedFolder.folder] });
+		api.createPersistentUpload.mockResolvedValue({ file: { ...ownFile, id: "pending", status: "PENDING" }, uploadTarget: { url: "https://upload.invalid", method: "PUT", headers: {}, expiresAt: "2026-09-04T12:15:00Z" } });
+		api.uploadResumable.mockReturnValue({ promise: Promise.resolve(), abort: vi.fn() });
+		api.completePersistentUpload.mockResolvedValue(ownFile);
+		const container = await renderLibrary();
+		const sharedButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent === "Shared with me");
+		await act(async () => { sharedButton?.click(); });
+		const folderButton = Array.from(container.querySelectorAll("button")).find((item) => item.textContent?.includes("Launch"));
+		await act(async () => { folderButton?.click(); });
+		expect(container.textContent).toContain("Contributor · You can upload and manage your own files");
+		expect(container.textContent).toContain("Uploaded by you");
+		expect(container.textContent).toContain("Uploaded by Owner");
+		const rows = Array.from(container.querySelectorAll<HTMLElement>(".owned-file-row"));
+		expect(rows.find((row) => row.textContent?.includes("mine.txt"))?.textContent).toContain("Delete");
+		expect(rows.find((row) => row.textContent?.includes("theirs.txt"))?.textContent).not.toContain("Delete");
+		const input = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [new File(["mine"], "mine.txt")] });
+		await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+		expect(api.createPersistentUpload).toHaveBeenCalledWith(expect.any(File), "verified-token", "folder-1");
 	});
 
 	it("continues the upload queue when one file fails", async () => {

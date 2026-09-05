@@ -68,6 +68,12 @@ func NewHandler(
 	mux.Handle("GET /v1/folders/{id}/members", handler.requireAuthentication(http.HandlerFunc(handler.listFolderMembers)))
 	mux.Handle("POST /v1/folders/{id}/members", handler.requireAuthentication(http.HandlerFunc(handler.addFolderMember)))
 	mux.Handle("DELETE /v1/folders/{id}/members/{userID}", handler.requireAuthentication(http.HandlerFunc(handler.removeFolderMember)))
+	mux.Handle("GET /v1/folders/{id}/invites", handler.requireAuthentication(http.HandlerFunc(handler.listFolderInvites)))
+	mux.Handle("POST /v1/folders/{id}/invites", handler.requireAuthentication(http.HandlerFunc(handler.createFolderInvite)))
+	mux.Handle("DELETE /v1/folders/{id}/invites/{inviteID}", handler.requireAuthentication(http.HandlerFunc(handler.revokeFolderInvite)))
+	mux.HandleFunc("GET /v1/folder-invites/{code}", handler.previewFolderInvite)
+	mux.Handle("POST /v1/folder-invites/{code}/accept", handler.requireAuthentication(http.HandlerFunc(handler.acceptFolderInvite)))
+	mux.Handle("DELETE /v1/folders/{id}/files/{fileID}", handler.requireAuthentication(http.HandlerFunc(handler.removeContributedFile)))
 	mux.HandleFunc("POST /v1/uploads", handler.createAnonymousUpload)
 	mux.HandleFunc("POST /v1/uploads/{id}/complete", handler.completeUpload)
 	mux.HandleFunc("POST /v1/transfers", handler.createAnonymousTransfer)
@@ -450,6 +456,103 @@ func (h *Handler) removeFolderMember(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *Handler) createFolderInvite(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	var input service.CreateFolderInviteInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	result, err := h.folders.CreateInvite(r.Context(), user.ID, r.PathValue("id"), input)
+	if h.writeFolderError(w, err, "create invite") {
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func (h *Handler) listFolderInvites(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	invites, err := h.folders.Invites(r.Context(), user.ID, r.PathValue("id"))
+	if h.writeFolderError(w, err, "list invites") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invites": invites})
+}
+
+func (h *Handler) revokeFolderInvite(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	err := h.folders.RevokeInvite(r.Context(), user.ID, r.PathValue("id"), r.PathValue("inviteID"))
+	if h.writeFolderError(w, err, "revoke invite") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) previewFolderInvite(w http.ResponseWriter, r *http.Request) {
+	if !h.folderService(w) {
+		return
+	}
+	preview, err := h.folders.PreviewInvite(r.Context(), r.PathValue("code"))
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrExpired):
+			writeError(w, http.StatusGone, "expired", "folder invite has expired")
+		case errors.Is(err, domain.ErrRevoked):
+			writeError(w, http.StatusGone, "revoked", "folder invite was revoked")
+		case errors.Is(err, domain.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "folder invite was not found")
+		default:
+			h.logger.Error("preview folder invite failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to preview folder invite")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invite": preview})
+}
+
+func (h *Handler) acceptFolderInvite(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	access, err := h.folders.AcceptInvite(r.Context(), user.ID, r.PathValue("code"))
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrExpired):
+			writeError(w, http.StatusGone, "expired", "folder invite has expired")
+		case errors.Is(err, domain.ErrRevoked):
+			writeError(w, http.StatusGone, "revoked", "folder invite was revoked")
+		default:
+			if h.writeFolderError(w, err, "accept invite") {
+				return
+			}
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, access)
+}
+
+func (h *Handler) removeContributedFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	err := h.folders.RemoveContributedFile(r.Context(), user.ID, r.PathValue("id"), r.PathValue("fileID"))
+	if h.writeFolderError(w, err, "remove contributed file") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) movePersistentFiles(w http.ResponseWriter, r *http.Request) {
 	user, ok := folderRequestUser(w, r)
 	if !ok || !h.folderService(w) {
@@ -472,7 +575,7 @@ func (h *Handler) writeFolderError(w http.ResponseWriter, err error, operation s
 		return false
 	}
 	switch {
-	case errors.Is(err, service.ErrInvalidFolderName), errors.Is(err, service.ErrInvalidMember), errors.Is(err, service.ErrTooManyFiles), errors.Is(err, service.ErrInvalidLibraryQuery):
+	case errors.Is(err, service.ErrInvalidFolderName), errors.Is(err, service.ErrInvalidMember), errors.Is(err, service.ErrTooManyFiles), errors.Is(err, service.ErrInvalidLibraryQuery), errors.Is(err, service.ErrInvalidFolderRole), errors.Is(err, service.ErrInvalidShareExpiration):
 		writeError(w, http.StatusUnprocessableEntity, "validation_failed", err.Error())
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "folder or user was not found")

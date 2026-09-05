@@ -26,6 +26,7 @@ afterEach(() => {
     view.container.remove();
   }
   authState.user = null;
+	window.history.replaceState({}, "", "/");
   vi.clearAllMocks();
 });
 
@@ -60,4 +61,10 @@ describe("AppDashboard", () => {
     renderDashboard();
     expect(replace).toHaveBeenCalledWith("/");
   });
+
+	it("preserves a legacy folder invite while sending a signed-out visitor to sign in", () => {
+		window.history.replaceState({}, "", "/app?folderInvite=join-code");
+		renderDashboard();
+		expect(replace).toHaveBeenCalledWith("/join/join-code");
+	});
 });
