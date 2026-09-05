@@ -30,17 +30,19 @@ type PersistentFileBackend interface {
 }
 
 type Files struct {
-	store        FileStore
-	storage      PersistentFileBackend
-	now          Clock
-	signedURLTTL time.Duration
-	maxFileBytes int64
+	store           FileStore
+	storage         PersistentFileBackend
+	now             Clock
+	signedURLTTL    time.Duration
+	maxFileBytes    int64
+	maxAccountBytes int64
 }
 
 type CreateFileUploadInput struct {
-	OriginalName string `json:"originalName"`
-	MIMEType     string `json:"mimeType"`
-	SizeBytes    int64  `json:"sizeBytes"`
+	OriginalName string  `json:"originalName"`
+	MIMEType     string  `json:"mimeType"`
+	SizeBytes    int64   `json:"sizeBytes"`
+	FolderID     *string `json:"folderId"`
 }
 
 type CreateFileUploadResult struct {
@@ -59,6 +61,7 @@ type FileLibraryResult struct {
 }
 
 var ErrInvalidShareExpiration = errors.New("share expiration must be 24h, 7d, 30d, or never")
+var ErrStorageQuotaExceeded = errors.New("account storage quota would be exceeded")
 
 type CreateFileShareInput struct {
 	ExpiresIn string `json:"expiresIn"`
@@ -69,8 +72,12 @@ type CreateFileShareResult struct {
 	SharePath string           `json:"sharePath"`
 }
 
-func NewFiles(store FileStore, backend PersistentFileBackend, now Clock, signedURLTTL time.Duration, maxFileBytes int64) *Files {
-	return &Files{store: store, storage: backend, now: now, signedURLTTL: signedURLTTL, maxFileBytes: maxFileBytes}
+func NewFiles(store FileStore, backend PersistentFileBackend, now Clock, signedURLTTL time.Duration, maxFileBytes int64, maxAccountBytes ...int64) *Files {
+	service := &Files{store: store, storage: backend, now: now, signedURLTTL: signedURLTTL, maxFileBytes: maxFileBytes}
+	if len(maxAccountBytes) > 0 {
+		service.maxAccountBytes = maxAccountBytes[0]
+	}
+	return service
 }
 
 func (s *Files) CreateUpload(ctx context.Context, ownerID string, input CreateFileUploadInput) (CreateFileUploadResult, error) {
@@ -81,6 +88,15 @@ func (s *Files) CreateUpload(ctx context.Context, ownerID string, input CreateFi
 	}
 	if input.SizeBytes <= 0 || input.SizeBytes > s.maxFileBytes {
 		return CreateFileUploadResult{}, ErrInvalidSize
+	}
+	if s.maxAccountBytes > 0 {
+		summary, err := s.store.GetOwnedFileUsage(ctx, ownerID)
+		if err != nil {
+			return CreateFileUploadResult{}, err
+		}
+		if summary.TotalBytes > s.maxAccountBytes-input.SizeBytes {
+			return CreateFileUploadResult{}, ErrStorageQuotaExceeded
+		}
 	}
 	if strings.TrimSpace(input.MIMEType) == "" {
 		input.MIMEType = mime.TypeByExtension(path.Ext(input.OriginalName))
@@ -97,13 +113,23 @@ func (s *Files) CreateUpload(ctx context.Context, ownerID string, input CreateFi
 	file := domain.File{
 		ID: fileID, OwnerID: &ownerID, StorageKey: fmt.Sprintf("users/%s/files/%s", ownerID, fileID),
 		OriginalName: input.OriginalName, MIMEType: input.MIMEType, SizeBytes: input.SizeBytes,
-		Status: domain.FileStatusPending, CreatedAt: now,
+		FolderID: normalizeOptionalID(input.FolderID), Status: domain.FileStatusPending, CreatedAt: now,
 	}
 	uploadTarget, err := s.storage.SignResumableUpload(ctx, file.StorageKey, file.MIMEType, now.Add(s.signedURLTTL))
 	if err != nil {
 		return CreateFileUploadResult{}, fmt.Errorf("sign persistent upload: %w", err)
 	}
-	if err := s.store.CreateOwnedFile(ctx, file); err != nil {
+	if quotaStore, ok := s.store.(interface {
+		CreateOwnedFileWithinQuota(context.Context, domain.File, int64) error
+	}); ok && s.maxAccountBytes > 0 {
+		err = quotaStore.CreateOwnedFileWithinQuota(ctx, file, s.maxAccountBytes)
+	} else {
+		err = s.store.CreateOwnedFile(ctx, file)
+	}
+	if errors.Is(err, domain.ErrQuotaExceeded) {
+		return CreateFileUploadResult{}, ErrStorageQuotaExceeded
+	}
+	if err != nil {
 		return CreateFileUploadResult{}, fmt.Errorf("create persistent file metadata: %w", err)
 	}
 	return CreateFileUploadResult{File: file, UploadTarget: uploadTarget}, nil
@@ -141,6 +167,7 @@ func (s *Files) List(ctx context.Context, ownerID string) (FileLibraryResult, er
 	if err != nil {
 		return FileLibraryResult{}, err
 	}
+	summary.QuotaBytes = s.maxAccountBytes
 	return FileLibraryResult{Files: files, Summary: summary}, nil
 }
 
@@ -198,7 +225,15 @@ func persistentShareExpiration(now time.Time, value string) (*time.Time, error) 
 }
 
 func (s *Files) Download(ctx context.Context, ownerID, fileID string) (FileDownloadResult, error) {
-	file, err := s.store.GetOwnedFile(ctx, ownerID, fileID)
+	var file domain.File
+	var err error
+	if accessible, ok := s.store.(interface {
+		GetAccessibleFile(context.Context, string, string) (domain.File, error)
+	}); ok {
+		file, err = accessible.GetAccessibleFile(ctx, ownerID, fileID)
+	} else {
+		file, err = s.store.GetOwnedFile(ctx, ownerID, fileID)
+	}
 	if err != nil {
 		return FileDownloadResult{}, err
 	}

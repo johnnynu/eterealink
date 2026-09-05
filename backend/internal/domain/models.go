@@ -6,10 +6,11 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("resource not found")
-	ErrExpired  = errors.New("resource expired")
-	ErrRevoked  = errors.New("resource revoked")
-	ErrConflict = errors.New("resource conflict")
+	ErrNotFound      = errors.New("resource not found")
+	ErrExpired       = errors.New("resource expired")
+	ErrRevoked       = errors.New("resource revoked")
+	ErrConflict      = errors.New("resource conflict")
+	ErrQuotaExceeded = errors.New("storage quota exceeded")
 )
 
 type User struct {
@@ -102,4 +103,52 @@ type OwnedFile struct {
 type FileLibrarySummary struct {
 	FileCount  int64 `json:"fileCount"`
 	TotalBytes int64 `json:"totalBytes"`
+	QuotaBytes int64 `json:"quotaBytes,omitempty"`
+}
+
+type FolderRole string
+
+const (
+	FolderRoleOwner  FolderRole = "OWNER"
+	FolderRoleViewer FolderRole = "VIEWER"
+)
+
+type Folder struct {
+	ID             string    `json:"id"`
+	OwnerID        string    `json:"ownerId"`
+	ParentFolderID *string   `json:"parentFolderId,omitempty"`
+	Name           string    `json:"name"`
+	CreatedAt      time.Time `json:"createdAt"`
+}
+
+type FolderAccess struct {
+	Folder Folder     `json:"folder"`
+	Role   FolderRole `json:"role"`
+	Owner  User       `json:"owner"`
+}
+
+type FolderMember struct {
+	User      User       `json:"user"`
+	Role      FolderRole `json:"role"`
+	CreatedAt time.Time  `json:"createdAt"`
+}
+
+type FolderContents struct {
+	Current     *FolderAccess      `json:"current,omitempty"`
+	Breadcrumbs []Folder           `json:"breadcrumbs"`
+	Folders     []FolderAccess     `json:"folders"`
+	Files       []OwnedFile        `json:"files"`
+	Summary     FileLibrarySummary `json:"summary"`
+	NextCursor  string             `json:"nextCursor,omitempty"`
+}
+
+type FileLibraryQuery struct {
+	Search     string
+	SharedOnly bool
+	Sort       string
+	Limit      int
+	CursorID   string
+	CursorTime time.Time
+	CursorName string
+	CursorSize int64
 }

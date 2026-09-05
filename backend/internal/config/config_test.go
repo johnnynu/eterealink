@@ -75,3 +75,24 @@ func TestPersistentFileLimitDefaultsToFiveGiB(t *testing.T) {
 		t.Fatalf("persistent file limit = %d, want %d", config.MaxPersistentFileBytes, want)
 	}
 }
+
+func TestPersistentStorageQuota(t *testing.T) {
+	t.Setenv("MAX_PERSISTENT_FILE_BYTES", "1024")
+	t.Setenv("MAX_PERSISTENT_STORAGE_BYTES", "4096")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MaxPersistentStorageBytes != 4096 {
+		t.Fatalf("persistent storage quota = %d", config.MaxPersistentStorageBytes)
+	}
+}
+
+func TestPersistentStorageQuotaCannotBeSmallerThanFileLimit(t *testing.T) {
+	t.Setenv("MAX_PERSISTENT_FILE_BYTES", "4096")
+	t.Setenv("MAX_PERSISTENT_STORAGE_BYTES", "1024")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "MAX_PERSISTENT_STORAGE_BYTES") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}

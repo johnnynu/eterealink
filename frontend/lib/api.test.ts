@@ -7,6 +7,7 @@ import {
   createPersistentUpload,
   getCurrentUser,
   listPersistentFiles,
+	listFolderContents,
   revokePersistentFileShare,
   resolveShare,
   uploadResumable,
@@ -100,6 +101,22 @@ describe("API client", () => {
       headers: { Authorization: "Bearer firebase-token" },
     });
   });
+
+	it("sends cursor-based folder library queries", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ files: [], folders: [], breadcrumbs: [], summary: {} }), {
+			status: 200, headers: { "Content-Type": "application/json" },
+		}));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await listFolderContents("firebase-token", "folder-1", "owned", {
+			search: "report", sort: "name", filter: "shared", limit: 10, cursor: "next-page",
+		});
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/api/v1/folders/folder-1?q=report&sort=name&filter=shared&limit=10&cursor=next-page",
+			{ headers: { Authorization: "Bearer firebase-token" }, cache: "no-store" },
+		);
+	});
 
   it("creates one transfer request containing every selected file", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ uploads: [] }), {

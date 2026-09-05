@@ -104,6 +104,30 @@ func TestPersistentFileRejectsInvalidInputAndMismatchedObject(t *testing.T) {
 	}
 }
 
+func TestPersistentFileEnforcesAccountQuotaAndAssignsFolder(t *testing.T) {
+	store := newOwnedFileStore()
+	ownerID := "user-1"
+	store.files["existing"] = domain.File{
+		ID: "existing", OwnerID: &ownerID, OriginalName: "existing.bin", SizeBytes: 8, Status: domain.FileStatusReady,
+	}
+	files := NewFiles(store, &ownedFileBackend{}, time.Now, 15*time.Minute, 10, 10)
+	folderID := "folder-1"
+	if _, err := files.CreateUpload(context.Background(), ownerID, CreateFileUploadInput{
+		OriginalName: "too-large.bin", SizeBytes: 3, FolderID: &folderID,
+	}); !errors.Is(err, ErrStorageQuotaExceeded) {
+		t.Fatalf("quota error = %v", err)
+	}
+	created, err := files.CreateUpload(context.Background(), ownerID, CreateFileUploadInput{
+		OriginalName: "fits.bin", SizeBytes: 2, FolderID: &folderID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.File.FolderID == nil || *created.File.FolderID != folderID {
+		t.Fatalf("folder id = %v", created.File.FolderID)
+	}
+}
+
 type ownedFileStore struct {
 	files  map[string]domain.File
 	shares map[string]domain.ShareLink

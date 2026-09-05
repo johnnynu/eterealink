@@ -15,7 +15,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
 vi.mock("@/components/auth-context", () => ({ useAuth: () => authState }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
-  listPersistentFiles: vi.fn(async () => ({ files: [], summary: { fileCount: 0, totalBytes: 0 } })),
+	listFolderContents: vi.fn(async () => ({ files: [], folders: [], breadcrumbs: [], summary: { fileCount: 0, totalBytes: 0 } })),
 }));
 
 const mounted: Array<{ container: HTMLDivElement; unmount: () => void }> = [];
@@ -39,17 +39,18 @@ function renderDashboard() {
 }
 
 describe("AppDashboard", () => {
-  it("shows a useful workspace for an authenticated user", () => {
+	it("shows a useful workspace for an authenticated user", async () => {
     authState.user = {
       id: "user-1",
       email: "person@example.com",
       displayName: "Person Example",
       createdAt: "2026-09-03T00:00:00Z",
     };
-    const container = renderDashboard();
+	const container = renderDashboard();
+	await act(async () => { await Promise.resolve(); });
     expect(container.textContent).toContain("Welcome back, Person.");
     expect(container.textContent).toContain("Your files");
-    expect(container.textContent).toContain("Shared with you");
+	expect(container.textContent).toContain("Shared with me");
     expect(container.textContent).toContain("Upload files");
     expect(container.textContent).toContain("Create a link");
     expect(container.querySelector("#workspace-files")).not.toBeNull();

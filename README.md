@@ -4,13 +4,13 @@
 
 # Eterealink
 
-Eterealink is a cloud-native file-sharing platform for quickly uploading, organizing, previewing, and sharing files through short URLs. Anonymous transfers require no account and expire after 24 hours; authenticated users can retain private files and create revocable per-file links, with folders and folder sharing following in Phase 5.
+Eterealink is a cloud-native file-sharing platform for quickly uploading, organizing, previewing, and sharing files through short URLs. Anonymous transfers require no account and expire after 24 hours; authenticated users can retain private files, organize them into folders, and share files or read-only folders.
 
 The project is designed as both a useful product and a practical demonstration of cloud architecture, networking, security, infrastructure as code, CI/CD, and observability on Google Cloud Platform.
 
 ## Project status
 
-Phases 1 through 4—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, and Firebase authentication—are complete. The pre-Phase 5 persistent-file library is also implemented.
+Phases 1 through 5—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, and virtual folder workflows—are complete.
 
 Implemented:
 
@@ -40,6 +40,12 @@ Implemented:
 - A 5 GiB per-file limit for authenticated persistent uploads while anonymous transfers remain capped at 1 GiB combined
 - Persistent-library storage totals, drag-and-drop, filename search, shared-file filtering, sorting, and bounded pagination
 - Signed-in `/app` workspace with a private file library and a separate 24-hour transfer flow
+- Nested virtual folders with breadcrumbs, folder-scoped uploads, renaming, and empty-folder deletion
+- Owner-only file and folder mutations with inherited read-only viewer access
+- Folder sharing with existing Eterealink users plus a dedicated “Shared with me” workspace
+- Multi-select file moves and deletion, including moves back to the library root
+- Persistent per-file upload queue with progress, cancel, retry, and independent failure handling
+- Atomic 25 GiB account storage quota enforcement, configurable independently from the 5 GiB per-file limit
 
 The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
 
@@ -130,10 +136,19 @@ An anonymous transfer follows this path:
 | `POST` | `/v1/files` | Create owner-linked persistent file metadata and an upload target |
 | `GET` | `/v1/files` | List the authenticated user's ready files and aggregate storage usage |
 | `POST` | `/v1/files/{id}/complete` | Verify and complete an owned persistent upload |
-| `GET` | `/v1/files/{id}/download` | Create an authorized short-lived download target for an owned file |
+| `GET` | `/v1/files/{id}/download` | Create a short-lived download target for an owned file or a file inherited through folder membership |
 | `POST` | `/v1/files/{id}/shares` | Create an expiring or non-expiring public link for an owned file |
 | `DELETE` | `/v1/files/{id}/shares/{shareID}` | Revoke an active link for an owned file |
 | `DELETE` | `/v1/files/{id}` | Delete an owned persistent file and its storage object |
+| `PATCH` | `/v1/files/move` | Move up to 100 owned files to a folder or the library root |
+| `POST` | `/v1/folders` | Create an owned root or nested virtual folder |
+| `GET` | `/v1/folders?scope=owned\|shared` | List owned root contents or folders directly shared with the user; supports `q`, `sort`, `filter`, `limit`, and `cursor` |
+| `GET` | `/v1/folders/{id}` | Browse an accessible folder with server-side search, sorting, filtering, and cursor pagination |
+| `PATCH` | `/v1/folders/{id}` | Rename or move an owned folder |
+| `DELETE` | `/v1/folders/{id}` | Delete an owned folder after it is empty |
+| `GET` | `/v1/folders/{id}/members` | List a folder's read-only viewers as its owner |
+| `POST` | `/v1/folders/{id}/members` | Grant read-only folder access to an existing user by email |
+| `DELETE` | `/v1/folders/{id}/members/{userID}` | Revoke a viewer's folder access |
 | `POST` | `/v1/uploads` | Create anonymous file/share metadata and an upload target |
 | `POST` | `/v1/uploads/{id}/complete` | Mark a successful direct upload ready |
 | `POST` | `/v1/transfers` | Create one anonymous multi-file transfer and resumable targets |
@@ -199,7 +214,7 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 3. Anonymous sharing ✅ | No-account upload-to-share experience with enforced 24-hour expiry |
 | 4. Authentication ✅ | Firebase Google Sign-In and verified API identity |
 | 4.5. Persistent files ✅ | Owner-scoped uploads, private file library, downloads, and deletion |
-| 5. Folders | OWNER/VIEWER folder organization and sharing |
+| 5. Folders ✅ | OWNER/VIEWER folders, bulk workflows, upload queue, quota, sharing, and cursor-based library queries |
 | 6. Previews | Browser previews with a safe generic fallback |
 | 7-10. Cloud platform | Containers, Cloud Run, private networking, and Terraform |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |

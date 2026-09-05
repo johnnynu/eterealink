@@ -1,21 +1,28 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useEffect, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-context";
-import { CopyIcon, DownloadIcon, FileIcon, LinkIcon, UploadIcon } from "@/components/icons";
+import { CopyIcon, DownloadIcon, FileIcon, FolderIcon, LinkIcon, UploadIcon, UsersIcon } from "@/components/icons";
 import {
+	addFolderMember,
   APIError,
   completePersistentUpload,
+	createFolder,
   createPersistentFileShare,
   createPersistentUpload,
   deletePersistentFile,
+	deleteFolder,
   getPersistentFileDownload,
-  listPersistentFiles,
+	listFolderContents,
+	listFolderMembers,
+	movePersistentFiles,
+	removeFolderMember,
+	updateFolder,
   revokePersistentFileShare,
   uploadResumable,
 } from "@/lib/api";
 import { formatBytes, formatExpiry, formatFileType, formatRelativeDate } from "@/lib/format";
-import type { FileLibrarySummary, FileRecord, OwnedFileRecord, PersistentShareExpiration } from "@/lib/types";
+import type { FileLibrarySummary, FileRecord, FolderAccess, FolderMember, FolderRecord, OwnedFileRecord, PersistentShareExpiration } from "@/lib/types";
 
 const MAX_FILE_BYTES = Number(process.env.NEXT_PUBLIC_MAX_PERSISTENT_FILE_BYTES ?? 5 * 1024 ** 3);
 const MAX_FILES_PER_SELECTION = 10;
@@ -23,6 +30,14 @@ const FILES_PER_PAGE = 10;
 
 type FileSort = "newest" | "oldest" | "name" | "size";
 type FileFilter = "all" | "shared";
+type LibraryScope = "owned" | "shared";
+type UploadQueueItem = {
+	id: string;
+	file: File;
+	progress: number;
+	status: "queued" | "uploading" | "complete" | "failed" | "canceled";
+	error?: string;
+};
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof APIError ? error.message : fallback;
@@ -43,19 +58,42 @@ export function PersistentFileLibrary() {
   const [shareBusyID, setShareBusyID] = useState("");
   const [copiedShareID, setCopiedShareID] = useState("");
   const [page, setPage] = useState(1);
+	const [nextCursor, setNextCursor] = useState("");
+	const [cursorHistory, setCursorHistory] = useState<string[]>([""]);
   const [searchQuery, setSearchQuery] = useState("");
   const [sort, setSort] = useState<FileSort>("newest");
   const [filter, setFilter] = useState<FileFilter>("all");
   const [dragging, setDragging] = useState(false);
+	const [scope, setScope] = useState<LibraryScope>("owned");
+	const [currentFolder, setCurrentFolder] = useState<FolderAccess | null>(null);
+	const [breadcrumbs, setBreadcrumbs] = useState<FolderRecord[]>([]);
+	const [folders, setFolders] = useState<FolderAccess[]>([]);
+	const [newFolderName, setNewFolderName] = useState("");
+	const [creatingFolder, setCreatingFolder] = useState(false);
+	const [selectedIDs, setSelectedIDs] = useState<string[]>([]);
+	const [memberEmail, setMemberEmail] = useState("");
+	const [members, setMembers] = useState<FolderMember[]>([]);
+	const [sharingFolder, setSharingFolder] = useState(false);
+	const [memberPanelOpen, setMemberPanelOpen] = useState(false);
+	const [editFolderName, setEditFolderName] = useState("");
+	const [folderBusy, setFolderBusy] = useState(false);
+	const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
+	const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+	const activeUpload = useRef<{ id: string; abort: () => void } | null>(null);
+	const uploadSequence = useRef(0);
+	const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let active = true;
     (async () => {
       try {
         const token = await getIDToken();
-        const result = await listPersistentFiles(token);
+		const result = await listFolderContents(token, undefined, "owned", { sort: "newest", limit: FILES_PER_PAGE });
         if (active) {
           setFiles(result.files);
+			setFolders(result.folders);
+			setBreadcrumbs(result.breadcrumbs);
+			setNextCursor(result.nextCursor ?? "");
           setSummary(result.summary ?? {
             fileCount: result.files.length,
             totalBytes: result.files.reduce((total, entry) => total + entry.file.sizeBytes, 0),
@@ -69,22 +107,186 @@ export function PersistentFileLibrary() {
         }
       }
     })();
-    return () => { active = false; };
+    return () => {
+		active = false;
+		if (searchTimer.current) clearTimeout(searchTimer.current);
+	};
   }, [getIDToken]);
 
-  function addCompletedFiles(completed: FileRecord[]) {
-    if (completed.length === 0) return;
-    const newest = completed.slice().reverse();
-    setFiles((current) => [...newest.map((file) => ({ file })), ...(current ?? [])]);
-    setSummary((current) => ({
-      fileCount: (current?.fileCount ?? 0) + completed.length,
-      totalBytes: (current?.totalBytes ?? 0) + completed.reduce((total, file) => total + file.sizeBytes, 0),
-    }));
-    setPage(1);
-  }
+	async function openLocation(
+		folderID?: string,
+		nextScope: LibraryScope = scope,
+		cursor = "",
+		overrides: { search?: string; sort?: FileSort; filter?: FileFilter } = {},
+		resetCursor = true,
+	) {
+		if (searchTimer.current) {
+			clearTimeout(searchTimer.current);
+			searchTimer.current = null;
+		}
+		setError("");
+		setFiles(null);
+		setSelectedIDs([]);
+		try {
+			const token = await getIDToken();
+			const result = await listFolderContents(token, folderID, nextScope, {
+				search: overrides.search ?? searchQuery,
+				sort: overrides.sort ?? sort,
+				filter: overrides.filter ?? filter,
+				limit: FILES_PER_PAGE,
+				cursor,
+			});
+			setScope(nextScope);
+			setCurrentFolder(result.current ?? null);
+			setEditFolderName(result.current?.folder.name ?? "");
+			setBreadcrumbs(result.breadcrumbs ?? []);
+			setFolders(result.folders ?? []);
+			setFiles(result.files ?? []);
+			setSummary(result.summary ?? { fileCount: 0, totalBytes: 0 });
+			setNextCursor(result.nextCursor ?? "");
+			setMembers([]);
+			setMemberPanelOpen(false);
+			if (resetCursor) {
+				setPage(1);
+				setCursorHistory([""]);
+			}
+		} catch (loadError) {
+			setFiles([]);
+			setFolders([]);
+			setError(errorMessage(loadError, "This folder could not be loaded. Please try again."));
+		}
+	}
+
+	async function renameCurrentFolder(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!currentFolder || !editFolderName.trim()) return;
+		setFolderBusy(true);
+		try {
+			const token = await getIDToken();
+			const folder = await updateFolder(currentFolder.folder.id, editFolderName, currentFolder.folder.parentFolderId, token);
+			setCurrentFolder((current) => current ? { ...current, folder } : current);
+			setBreadcrumbs((current) => current.map((item) => item.id === folder.id ? folder : item));
+		} catch (folderError) {
+			setError(errorMessage(folderError, "The folder could not be renamed."));
+		} finally {
+			setFolderBusy(false);
+		}
+	}
+
+	async function removeCurrentFolder() {
+		if (!currentFolder) return;
+		setFolderBusy(true);
+		try {
+			const token = await getIDToken();
+			const parentID = currentFolder.folder.parentFolderId;
+			await deleteFolder(currentFolder.folder.id, token);
+			await openLocation(parentID, "owned");
+		} catch (folderError) {
+			setError(errorMessage(folderError, "Only an empty folder can be deleted."));
+		} finally {
+			setFolderBusy(false);
+		}
+	}
+
+	async function submitFolder(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!newFolderName.trim() || creatingFolder) return;
+		setCreatingFolder(true);
+		setError("");
+		try {
+			const token = await getIDToken();
+			await createFolder(newFolderName, currentFolder?.folder.id, token);
+			setNewFolderName("");
+			await openLocation(currentFolder?.folder.id, "owned");
+		} catch (folderError) {
+			setError(errorMessage(folderError, "The folder could not be created."));
+		} finally {
+			setCreatingFolder(false);
+		}
+	}
+
+	async function moveSelected(folderID?: string) {
+		if (selectedIDs.length === 0) return;
+		setError("");
+		try {
+			const token = await getIDToken();
+			await movePersistentFiles(selectedIDs, folderID, token);
+			await openLocation(currentFolder?.folder.id, "owned");
+		} catch (moveError) {
+			setError(errorMessage(moveError, "The selected files could not be moved."));
+		}
+	}
+
+	async function deleteSelected() {
+		if (!bulkDeleteConfirm) {
+			setBulkDeleteConfirm(true);
+			return;
+		}
+		setError("");
+		try {
+			const token = await getIDToken();
+			const removed = (files ?? []).filter((entry) => selectedIDs.includes(entry.file.id));
+			for (const fileID of selectedIDs) await deletePersistentFile(fileID, token);
+			setFiles((current) => current?.filter((entry) => !selectedIDs.includes(entry.file.id)) ?? []);
+			setSummary((current) => ({
+				fileCount: Math.max(0, (current?.fileCount ?? 0) - removed.length),
+				totalBytes: Math.max(0, (current?.totalBytes ?? 0) - removed.reduce((total, entry) => total + entry.file.sizeBytes, 0)),
+				quotaBytes: current?.quotaBytes,
+			}));
+			setSelectedIDs([]);
+			setBulkDeleteConfirm(false);
+		} catch (deleteError) {
+			setError(errorMessage(deleteError, "The selected files could not all be deleted."));
+		}
+	}
+
+	async function loadMembers() {
+		if (!currentFolder) return;
+		setMemberPanelOpen(true);
+		setSharingFolder(true);
+		try {
+			const token = await getIDToken();
+			setMembers(await listFolderMembers(currentFolder.folder.id, token));
+		} catch (memberError) {
+			setError(errorMessage(memberError, "Folder viewers could not be loaded."));
+		} finally {
+			setSharingFolder(false);
+		}
+	}
+
+	async function inviteMember(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		if (!currentFolder || !memberEmail.trim()) return;
+		setSharingFolder(true);
+		setError("");
+		try {
+			const token = await getIDToken();
+			const member = await addFolderMember(currentFolder.folder.id, memberEmail, token);
+			setMembers((current) => [...current.filter((item) => item.user.id !== member.user.id), member]);
+			setMemberEmail("");
+		} catch (memberError) {
+			setError(errorMessage(memberError, "The viewer could not be added. They must sign in to Eterealink first."));
+		} finally {
+			setSharingFolder(false);
+		}
+	}
+
+	async function revokeMember(userID: string) {
+		if (!currentFolder) return;
+		setSharingFolder(true);
+		try {
+			const token = await getIDToken();
+			await removeFolderMember(currentFolder.folder.id, userID, token);
+			setMembers((current) => current.filter((item) => item.user.id !== userID));
+		} catch (memberError) {
+			setError(errorMessage(memberError, "The viewer could not be removed."));
+		} finally {
+			setSharingFolder(false);
+		}
+	}
 
   async function uploadSelectedFiles(selected: File[]) {
-    if (selected.length === 0 || uploading) return;
+	if (scope !== "owned" || selected.length === 0 || uploading) return;
     if (selected.length > MAX_FILES_PER_SELECTION) {
       setError(`Choose no more than ${MAX_FILES_PER_SELECTION} files at once.`);
       return;
@@ -97,40 +299,62 @@ export function PersistentFileLibrary() {
     setUploading(true);
     setUploadProgress(0);
     setError("");
+	const queue = selected.map((file) => ({
+		id: `upload-${uploadSequence.current += 1}`,
+		file,
+		progress: 0,
+		status: "queued" as const,
+	}));
+	setUploadQueue(queue);
     const completed: FileRecord[] = [];
-    let pendingID = "";
+	const failures: string[] = [];
     try {
       const token = await getIDToken();
-      for (let index = 0; index < selected.length; index += 1) {
-        const file = selected[index];
+	  for (let index = 0; index < queue.length; index += 1) {
+		const item = queue[index];
+		const file = item.file;
+		let pendingID = "";
         setActiveFile(file.name);
-        const created = await createPersistentUpload(file, token);
-        pendingID = created.file.id;
-        const upload = uploadResumable(file, created.uploadTarget, (filePercent) => {
-          setUploadProgress(Math.round(((index + filePercent / 100) / selected.length) * 100));
-        });
-        await upload.promise;
-        completed.push(await completePersistentUpload(created.file.id, token));
-        pendingID = "";
+		setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, status: "uploading", error: undefined } : queued));
+		try {
+			const created = await createPersistentUpload(file, token, currentFolder?.folder.id);
+			pendingID = created.file.id;
+			const upload = uploadResumable(file, created.uploadTarget, (filePercent) => {
+				setUploadProgress(Math.round(((index + filePercent / 100) / queue.length) * 100));
+				setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, progress: filePercent } : queued));
+			});
+			activeUpload.current = { id: item.id, abort: upload.abort };
+			await upload.promise;
+			completed.push(await completePersistentUpload(created.file.id, token));
+			pendingID = "";
+			setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, progress: 100, status: "complete" } : queued));
+		} catch (uploadError) {
+			const message = errorMessage(uploadError, `${file.name} could not be uploaded.`);
+			const canceled = uploadError instanceof APIError && uploadError.code === "canceled";
+			if (!canceled) failures.push(message);
+			setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, status: canceled ? "canceled" : "failed", error: canceled ? undefined : message } : queued));
+			if (pendingID) {
+				try { await deletePersistentFile(pendingID, token); } catch { /* hidden pending metadata is cleaned up later */ }
+			}
+		} finally {
+			activeUpload.current = null;
+		}
       }
-      addCompletedFiles(completed);
+	  if (completed.length > 0) await openLocation(currentFolder?.folder.id, scope);
       setUploadProgress(100);
-    } catch (uploadError) {
-      setError(errorMessage(uploadError, "Your upload could not be completed. Please try again."));
-      if (completed.length > 0) {
-        addCompletedFiles(completed);
-      }
-      try {
-        const token = await getIDToken();
-        if (pendingID) await deletePersistentFile(pendingID, token);
-      } catch {
-        // The incomplete metadata remains hidden from the ready-file listing.
-      }
+		if (failures.length > 0) setError(`${failures.length} ${failures.length === 1 ? "file" : "files"} could not be uploaded. Retry from the queue below.`);
+	} catch (uploadError) {
+		setError(errorMessage(uploadError, "Your uploads could not be started. Please try again."));
     } finally {
+	  activeUpload.current = null;
       setUploading(false);
       setActiveFile("");
     }
   }
+
+	function cancelActiveUpload(itemID: string) {
+		if (activeUpload.current?.id === itemID) activeUpload.current.abort();
+	}
 
   async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(event.target.files ?? []);
@@ -167,6 +391,7 @@ export function PersistentFileLibrary() {
         setSummary((current) => ({
           fileCount: Math.max(0, (current?.fileCount ?? 0) - 1),
           totalBytes: Math.max(0, (current?.totalBytes ?? 0) - removedFile.sizeBytes),
+		  quotaBytes: current?.quotaBytes,
         }));
       }
       setConfirmDeleteID("");
@@ -227,45 +452,45 @@ export function PersistentFileLibrary() {
     }
   }
 
-  const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
-  const filteredFiles = (files ?? [])
-    .filter((entry) => filter === "all" || Boolean(entry.share))
-    .filter((entry) => entry.file.originalName.toLocaleLowerCase().includes(normalizedQuery))
-    .sort((left, right) => {
-      const leftDate = Date.parse(left.file.completedAt ?? left.file.createdAt);
-      const rightDate = Date.parse(right.file.completedAt ?? right.file.createdAt);
-      switch (sort) {
-        case "oldest": return leftDate - rightDate;
-        case "name": return left.file.originalName.localeCompare(right.file.originalName, undefined, { sensitivity: "base", numeric: true });
-        case "size": return right.file.sizeBytes - left.file.sizeBytes;
-        default: return rightDate - leftDate;
-      }
-    });
-  const pageCount = Math.max(1, Math.ceil(filteredFiles.length / FILES_PER_PAGE));
-  const currentPage = Math.min(page, pageCount);
-  const pageStart = (currentPage - 1) * FILES_PER_PAGE;
-  const visibleFiles = filteredFiles.slice(pageStart, pageStart + FILES_PER_PAGE);
+  const visibleFiles = files ?? [];
+  const pageStart = (page - 1) * FILES_PER_PAGE;
 
   function resetLibraryView() {
-    setPage(1);
     setOpenShareID("");
     setConfirmDeleteID("");
     setCopiedShareID("");
   }
 
-  function goToPage(nextPage: number) {
-    setPage(Math.max(1, Math.min(nextPage, pageCount)));
-    setOpenShareID("");
-    setConfirmDeleteID("");
-    setCopiedShareID("");
-  }
+	async function goToNextPage() {
+		if (!nextCursor) return;
+		const cursor = nextCursor;
+		setCursorHistory((current) => [...current.slice(0, page), cursor]);
+		setPage((current) => current + 1);
+		resetLibraryView();
+		await openLocation(currentFolder?.folder.id, scope, cursor, {}, false);
+	}
+
+	async function goToPreviousPage() {
+		if (page <= 1) return;
+		const cursor = cursorHistory[page - 2] ?? "";
+		setPage((current) => current - 1);
+		resetLibraryView();
+		await openLocation(currentFolder?.folder.id, scope, cursor, {}, false);
+	}
+
+	function updateSearch(value: string) {
+		setSearchQuery(value);
+		resetLibraryView();
+		if (searchTimer.current) clearTimeout(searchTimer.current);
+		searchTimer.current = setTimeout(() => { void openLocation(currentFolder?.folder.id, scope, "", { search: value }); }, 250);
+	}
 
   return (
     <div
       className={`library-content ${dragging ? "is-dragging" : ""}`}
       onDragEnter={(event) => {
         event.preventDefault();
-        if (!uploading && event.dataTransfer.types.includes("Files")) setDragging(true);
+		if (scope === "owned" && !uploading && event.dataTransfer.types.includes("Files")) setDragging(true);
       }}
       onDragOver={(event) => event.preventDefault()}
       onDragLeave={(event) => {
@@ -275,19 +500,37 @@ export function PersistentFileLibrary() {
       onDrop={dropFiles}
     >
       {dragging && <div className="library-drop-overlay" aria-hidden="true"><UploadIcon /> Drop files to add them</div>}
+		<nav className="library-scope" aria-label="Library location">
+			<button type="button" aria-pressed={scope === "owned"} onClick={() => openLocation(undefined, "owned")}>My files</button>
+			<button type="button" aria-pressed={scope === "shared"} onClick={() => openLocation(undefined, "shared")}>Shared with me</button>
+		</nav>
+		{scope === "owned" && breadcrumbs.length > 0 && (
+			<nav className="folder-breadcrumbs" aria-label="Folder breadcrumbs">
+				<button type="button" onClick={() => openLocation(undefined, "owned")}>My files</button>
+				{breadcrumbs.map((folder) => <span key={folder.id}>/ <button type="button" onClick={() => openLocation(folder.id, "owned")}>{folder.name}</button></span>)}
+			</nav>
+		)}
+		{scope === "shared" && currentFolder && (
+			<nav className="folder-breadcrumbs" aria-label="Folder breadcrumbs">
+				<button type="button" onClick={() => openLocation(undefined, "shared")}>Shared with me</button>
+				{breadcrumbs.map((folder) => <span key={folder.id}>/ <button type="button" onClick={() => openLocation(folder.id, "shared")}>{folder.name}</button></span>)}
+			</nav>
+		)}
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Library</p>
-          <h2 id="library-title">Your files</h2>
+			<h2 id="library-title">{currentFolder?.folder.name ?? (scope === "shared" ? "Shared with you" : "Your files")}</h2>
+			{currentFolder?.role === "VIEWER" && <p className="viewer-note">Read-only · Shared by {currentFolder.owner.displayName || currentFolder.owner.email}</p>}
           <p className="library-summary" aria-live="polite">
             {summary === null
               ? "Loading storage usage…"
               : `${summary.fileCount} ${summary.fileCount === 1 ? "file" : "files"} · ${formatBytes(summary.totalBytes)} stored`}
           </p>
+		  {summary?.quotaBytes ? <div className="storage-capacity" title={`${formatBytes(summary.totalBytes)} of ${formatBytes(summary.quotaBytes)}`}><span style={{ width: `${Math.min(100, (summary.totalBytes / summary.quotaBytes) * 100)}%` }} /></div> : null}
         </div>
-        <label className={`primary-button library-upload-button ${uploading ? "is-disabled" : ""}`} htmlFor="owned-files-input">
+		{scope === "owned" && <label className={`primary-button library-upload-button ${uploading ? "is-disabled" : ""}`} htmlFor="owned-files-input">
           <UploadIcon /> {uploading ? "Uploading…" : "Upload files"}
-        </label>
+		</label>}
         <input
           id="owned-files-input"
           className="visually-hidden"
@@ -298,16 +541,79 @@ export function PersistentFileLibrary() {
         />
       </div>
 
-      {uploading && (
+	  {uploading && uploadQueue.length > 1 && (
         <div className="library-progress" role="status">
-          <span>Uploading {activeFile}</span>
+		  <span>Uploading {uploadQueue.filter((item) => item.status === "complete").length + 1} of {uploadQueue.length} · {activeFile}</span>
           <strong>{uploadProgress}%</strong>
           <div className="progress-track"><span style={{ width: `${uploadProgress}%` }} /></div>
         </div>
       )}
+	  {uploadQueue.length > 0 && (
+		<div className="persistent-upload-queue" aria-label="Persistent upload queue">
+			{uploadQueue.map((item) => (
+				<div className={`upload-queue-item ${item.status}`} key={item.id}>
+					<span><strong>{item.file.name}</strong><small>{item.status === "failed" ? item.error : item.status}</small></span>
+					<div className="queue-progress"><span style={{ width: `${item.progress}%` }} /></div>
+					{item.status === "uploading" && <button type="button" onClick={() => cancelActiveUpload(item.id)}>Cancel</button>}
+					{(item.status === "failed" || item.status === "canceled") && <button type="button" disabled={uploading} onClick={() => uploadSelectedFiles([item.file])}>Retry</button>}
+				</div>
+			))}
+			{!uploading && uploadQueue.every((item) => item.status === "complete") && <button type="button" className="clear-upload-queue" onClick={() => setUploadQueue([])}>Clear completed</button>}
+		</div>
+	  )}
       {error && <p className="error-message library-error" role="alert">{error}</p>}
 
-      {files !== null && files.length > 0 && (
+		{scope === "owned" && (
+			<div className="folder-tools">
+				<form onSubmit={submitFolder}>
+					<label htmlFor="new-folder-name" className="visually-hidden">New folder name</label>
+					<input id="new-folder-name" value={newFolderName} onChange={(event) => setNewFolderName(event.target.value)} placeholder="New folder name" maxLength={255} />
+					<button type="submit" disabled={creatingFolder || !newFolderName.trim()}><FolderIcon /> {creatingFolder ? "Creating…" : "New folder"}</button>
+				</form>
+				{currentFolder?.role === "OWNER" && <button type="button" className="manage-viewers" onClick={loadMembers}><UsersIcon /> Manage viewers</button>}
+			</div>
+		)}
+
+		{currentFolder?.role === "OWNER" && memberPanelOpen && (
+			<div className="folder-sharing-panel">
+				<div><strong>Read-only viewers</strong><p>Viewers can browse and download this folder and its subfolders.</p></div>
+				<form onSubmit={inviteMember}><input type="email" required placeholder="viewer@example.com" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} /><button disabled={sharingFolder}>Add viewer</button></form>
+				{members.map((member) => <div className="folder-member" key={member.user.id}><span><strong>{member.user.displayName || member.user.email}</strong><small>{member.user.email}</small></span><button type="button" disabled={sharingFolder} onClick={() => revokeMember(member.user.id)}>Remove</button></div>)}
+			</div>
+		)}
+
+		{currentFolder?.role === "OWNER" && (
+			<div className="folder-owner-actions">
+				<form onSubmit={renameCurrentFolder}><label htmlFor="rename-folder" className="visually-hidden">Rename folder</label><input id="rename-folder" value={editFolderName} maxLength={255} onChange={(event) => setEditFolderName(event.target.value)} /><button disabled={folderBusy || editFolderName.trim() === currentFolder.folder.name}>Rename</button></form>
+				{files?.length === 0 && folders.length === 0 ? (
+					<button type="button" className="delete-folder" disabled={folderBusy} onClick={removeCurrentFolder}>Delete folder</button>
+				) : (
+					<span className="folder-delete-note">Move or delete everything to remove this folder.</span>
+				)}
+			</div>
+		)}
+
+		{folders.length > 0 && (
+			<div className="folder-grid" aria-label="Folders">
+				{folders.map((access) => (
+					<button type="button" className="folder-card" key={access.folder.id} onClick={() => openLocation(access.folder.id, scope)}>
+						<span><FolderIcon /></span><strong>{access.folder.name}</strong>
+						<small>{access.role === "VIEWER" ? `From ${access.owner.displayName || access.owner.email}` : "Folder"}</small>
+					</button>
+				))}
+			</div>
+		)}
+
+		{scope === "owned" && selectedIDs.length > 0 && (
+			<div className="bulk-actions" role="toolbar" aria-label="Selected file actions">
+				<strong>{selectedIDs.length} selected</strong>
+				<label>Move to <select defaultValue="" onChange={(event) => { if (event.target.value === "__root") moveSelected(undefined); else if (event.target.value) moveSelected(event.target.value); event.target.value = ""; }}><option value="">Choose folder</option><option value="__root">My files</option>{folders.map((access) => <option key={access.folder.id} value={access.folder.id}>{access.folder.name}</option>)}</select></label>
+				<button type="button" className={bulkDeleteConfirm ? "danger" : ""} onClick={deleteSelected}>{bulkDeleteConfirm ? "Confirm delete" : "Delete"}</button>
+				<button type="button" onClick={() => setSelectedIDs([])}>Clear</button>
+			</div>
+		)}
+
+	  {files !== null && ((summary?.fileCount ?? 0) > 0 || searchQuery !== "" || filter !== "all") && (
         <div className="library-toolbar">
           <label className="library-search">
             <span className="visually-hidden">Search your files</span>
@@ -315,24 +621,21 @@ export function PersistentFileLibrary() {
               type="search"
               placeholder="Search files"
               value={searchQuery}
-              onChange={(event) => {
-                setSearchQuery(event.target.value);
-                resetLibraryView();
-              }}
+			  onChange={(event) => updateSearch(event.target.value)}
             />
           </label>
           <div className="library-filter" aria-label="Filter files">
             <button
               type="button"
               aria-pressed={filter === "all"}
-              onClick={() => { setFilter("all"); resetLibraryView(); }}
+			  onClick={() => { setFilter("all"); resetLibraryView(); void openLocation(currentFolder?.folder.id, scope, "", { filter: "all" }); }}
             >
               All
             </button>
             <button
               type="button"
               aria-pressed={filter === "shared"}
-              onClick={() => { setFilter("shared"); resetLibraryView(); }}
+			  onClick={() => { setFilter("shared"); resetLibraryView(); void openLocation(currentFolder?.folder.id, scope, "", { filter: "shared" }); }}
             >
               Shared
             </button>
@@ -342,8 +645,10 @@ export function PersistentFileLibrary() {
             <select
               value={sort}
               onChange={(event) => {
-                setSort(event.target.value as FileSort);
+				const nextSort = event.target.value as FileSort;
+				setSort(nextSort);
                 resetLibraryView();
+				void openLocation(currentFolder?.folder.id, scope, "", { sort: nextSort });
               }}
             >
               <option value="newest">Newest</option>
@@ -361,16 +666,16 @@ export function PersistentFileLibrary() {
           <span />
           <span />
         </div>
-      ) : files.length === 0 ? (
+		) : files.length === 0 && folders.length === 0 && searchQuery === "" && filter === "all" ? (
         <div className="library-empty">
           <span className="empty-icon"><FileIcon /></span>
           <div>
-            <h3>Your library is empty.</h3>
-            <p>Upload files you want to keep. They stay private and do not expire.</p>
+			<h3>{scope === "shared" ? "Nothing has been shared with you." : currentFolder ? "This folder is empty." : "Your library is empty."}</h3>
+			<p>{scope === "shared" ? "Folders shared by other Eterealink users will appear here." : "Upload files you want to keep. They stay private and do not expire."}</p>
           </div>
-          <label className="secondary-button file-picker-label" htmlFor="owned-files-input">Choose files</label>
+		  {scope === "owned" && <label className="secondary-button file-picker-label" htmlFor="owned-files-input">Choose files</label>}
         </div>
-      ) : filteredFiles.length === 0 ? (
+		) : visibleFiles.length === 0 ? (
         <div className="library-no-results">
           <FileIcon />
           <h3>No files found.</h3>
@@ -381,18 +686,20 @@ export function PersistentFileLibrary() {
               setSearchQuery("");
               setFilter("all");
               resetLibraryView();
+			  void openLocation(currentFolder?.folder.id, scope, "", { search: "", filter: "all" });
             }}
           >
             Clear filters
           </button>
-        </div>
-      ) : (
+		</div>
+		) : (
         <div className="owned-file-list" aria-label="Your files">
           {visibleFiles.map((entry) => {
             const file = entry.file;
             const shareIsOpen = openShareID === file.id;
             return (
             <article className={`owned-file-row ${shareIsOpen ? "share-is-open" : ""}`} key={file.id}>
+			  {scope === "owned" && <input className="file-select" type="checkbox" aria-label={`Select ${file.originalName}`} checked={selectedIDs.includes(file.id)} onChange={(event) => setSelectedIDs((current) => event.target.checked ? [...current, file.id] : current.filter((id) => id !== file.id))} />}
               <span className="owned-file-icon"><FileIcon /></span>
               <span className="owned-file-name">
                 <strong title={file.originalName}>{file.originalName}</strong>
@@ -406,14 +713,14 @@ export function PersistentFileLibrary() {
                 {formatRelativeDate(file.completedAt ?? file.createdAt)}
               </span>
               <span className="owned-file-actions">
-                {confirmDeleteID === file.id ? (
+				{scope === "owned" && confirmDeleteID === file.id ? (
                   <>
                     <button type="button" className="row-action" onClick={() => setConfirmDeleteID("")}>Cancel</button>
                     <button type="button" className="row-action danger" disabled={deletingID === file.id} onClick={() => removeFile(file.id)}>
                       {deletingID === file.id ? "Deleting…" : "Delete"}
                     </button>
                   </>
-                ) : (
+				) : scope === "owned" ? (
                   <>
                     <button type="button" className="row-action download" onClick={() => downloadFile(file.id)}>
                       <DownloadIcon /> Download
@@ -432,7 +739,7 @@ export function PersistentFileLibrary() {
                     </button>
                     <button type="button" className="row-action" onClick={() => setConfirmDeleteID(file.id)}>Delete</button>
                   </>
-                )}
+				) : <button type="button" className="row-action download" onClick={() => downloadFile(file.id)}><DownloadIcon /> Download</button>}
               </span>
               {shareIsOpen && (
                 <div className="file-share-panel">
@@ -486,17 +793,17 @@ export function PersistentFileLibrary() {
               )}
             </article>
           )})}
-          {filteredFiles.length > FILES_PER_PAGE && (
+		  {(page > 1 || nextCursor) && (
             <nav className="library-pagination" aria-label="File library pages">
               <span>
-                {pageStart + 1}–{Math.min(pageStart + FILES_PER_PAGE, filteredFiles.length)} of {filteredFiles.length}
+				{pageStart + 1}–{pageStart + visibleFiles.length}
               </span>
               <div>
-                <button type="button" disabled={currentPage === 1} onClick={() => goToPage(currentPage - 1)}>
+				<button type="button" disabled={page === 1} onClick={goToPreviousPage}>
                   Previous
                 </button>
-                <span>Page {currentPage} of {pageCount}</span>
-                <button type="button" disabled={currentPage === pageCount} onClick={() => goToPage(currentPage + 1)}>
+				<span>Page {page}</span>
+				<button type="button" disabled={!nextCursor} onClick={goToNextPage}>
                   Next
                 </button>
               </div>

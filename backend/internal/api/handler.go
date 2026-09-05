@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ type Handler struct {
 	transfers *service.Transfers
 	bundles   *service.Bundles
 	files     *service.Files
+	folders   *service.Folders
 	users     *service.Users
 	verifier  identity.Verifier
 	readiness ReadinessChecker
@@ -37,10 +39,14 @@ func NewHandler(
 	verifier identity.Verifier,
 	readiness ReadinessChecker,
 	logger *slog.Logger,
+	folders ...*service.Folders,
 ) http.Handler {
 	handler := &Handler{
 		transfers: transfers, bundles: bundles, files: files, users: users, verifier: verifier,
 		readiness: readiness, logger: logger,
+	}
+	if len(folders) > 0 {
+		handler.folders = folders[0]
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handler.health)
@@ -53,6 +59,15 @@ func NewHandler(
 	mux.Handle("POST /v1/files/{id}/shares", handler.requireAuthentication(http.HandlerFunc(handler.createPersistentFileShare)))
 	mux.Handle("DELETE /v1/files/{id}/shares/{shareID}", handler.requireAuthentication(http.HandlerFunc(handler.revokePersistentFileShare)))
 	mux.Handle("DELETE /v1/files/{id}", handler.requireAuthentication(http.HandlerFunc(handler.deletePersistentFile)))
+	mux.Handle("PATCH /v1/files/move", handler.requireAuthentication(http.HandlerFunc(handler.movePersistentFiles)))
+	mux.Handle("POST /v1/folders", handler.requireAuthentication(http.HandlerFunc(handler.createFolder)))
+	mux.Handle("GET /v1/folders", handler.requireAuthentication(http.HandlerFunc(handler.listRootFolders)))
+	mux.Handle("GET /v1/folders/{id}", handler.requireAuthentication(http.HandlerFunc(handler.getFolder)))
+	mux.Handle("PATCH /v1/folders/{id}", handler.requireAuthentication(http.HandlerFunc(handler.updateFolder)))
+	mux.Handle("DELETE /v1/folders/{id}", handler.requireAuthentication(http.HandlerFunc(handler.deleteFolder)))
+	mux.Handle("GET /v1/folders/{id}/members", handler.requireAuthentication(http.HandlerFunc(handler.listFolderMembers)))
+	mux.Handle("POST /v1/folders/{id}/members", handler.requireAuthentication(http.HandlerFunc(handler.addFolderMember)))
+	mux.Handle("DELETE /v1/folders/{id}/members/{userID}", handler.requireAuthentication(http.HandlerFunc(handler.removeFolderMember)))
 	mux.HandleFunc("POST /v1/uploads", handler.createAnonymousUpload)
 	mux.HandleFunc("POST /v1/uploads/{id}/complete", handler.completeUpload)
 	mux.HandleFunc("POST /v1/transfers", handler.createAnonymousTransfer)
@@ -142,6 +157,12 @@ func (h *Handler) createPersistentFile(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, service.ErrInvalidName), errors.Is(err, service.ErrInvalidSize):
 			writeError(w, http.StatusUnprocessableEntity, "validation_failed", err.Error())
+		case errors.Is(err, domain.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "destination folder was not found")
+		case errors.Is(err, domain.ErrConflict):
+			writeError(w, http.StatusConflict, "name_conflict", "a file with this name already exists in the folder")
+		case errors.Is(err, service.ErrStorageQuotaExceeded):
+			writeError(w, http.StatusConflict, "storage_quota_exceeded", err.Error())
 		default:
 			h.logger.Error("create persistent upload failed", "user_id", user.ID, "error", err)
 			writeError(w, http.StatusInternalServerError, "internal_error", "unable to create persistent upload")
@@ -293,6 +314,175 @@ func (h *Handler) deletePersistentFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) folderService(w http.ResponseWriter) bool {
+	if h.folders == nil {
+		writeError(w, http.StatusServiceUnavailable, "folders_unavailable", "folder service is not configured")
+		return false
+	}
+	return true
+}
+
+func folderRequestUser(w http.ResponseWriter, r *http.Request) (domain.User, bool) {
+	user, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+	}
+	return user, ok
+}
+
+func (h *Handler) createFolder(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	var input service.CreateFolderInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	folder, err := h.folders.Create(r.Context(), user.ID, input)
+	if h.writeFolderError(w, err, "create") {
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"folder": folder})
+}
+
+func (h *Handler) listRootFolders(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	result, err := h.folders.ListRoot(r.Context(), user.ID, r.URL.Query().Get("scope"), folderListInput(r))
+	if h.writeFolderError(w, err, "list") {
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) getFolder(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	result, err := h.folders.Contents(r.Context(), user.ID, r.PathValue("id"), folderListInput(r))
+	if h.writeFolderError(w, err, "read") {
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func folderListInput(r *http.Request) service.ListFolderInput {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	return service.ListFolderInput{
+		Search: r.URL.Query().Get("q"), Sort: r.URL.Query().Get("sort"), Filter: r.URL.Query().Get("filter"),
+		Limit: limit, Cursor: r.URL.Query().Get("cursor"),
+	}
+}
+
+func (h *Handler) updateFolder(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	var input service.UpdateFolderInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	folder, err := h.folders.Update(r.Context(), user.ID, r.PathValue("id"), input)
+	if h.writeFolderError(w, err, "update") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"folder": folder})
+}
+
+func (h *Handler) deleteFolder(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	if h.writeFolderError(w, h.folders.Delete(r.Context(), user.ID, r.PathValue("id")), "delete") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) listFolderMembers(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	members, err := h.folders.Members(r.Context(), user.ID, r.PathValue("id"))
+	if h.writeFolderError(w, err, "list members") {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"members": members})
+}
+
+func (h *Handler) addFolderMember(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	var input service.AddFolderMemberInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	member, err := h.folders.AddMember(r.Context(), user.ID, r.PathValue("id"), input)
+	if h.writeFolderError(w, err, "share") {
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"member": member})
+}
+
+func (h *Handler) removeFolderMember(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	err := h.folders.RemoveMember(r.Context(), user.ID, r.PathValue("id"), r.PathValue("userID"))
+	if h.writeFolderError(w, err, "remove member") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) movePersistentFiles(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	var input service.MoveFilesInput
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	err := h.folders.MoveFiles(r.Context(), user.ID, input)
+	if h.writeFolderError(w, err, "move files") {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) writeFolderError(w http.ResponseWriter, err error, operation string) bool {
+	if err == nil {
+		return false
+	}
+	switch {
+	case errors.Is(err, service.ErrInvalidFolderName), errors.Is(err, service.ErrInvalidMember), errors.Is(err, service.ErrTooManyFiles), errors.Is(err, service.ErrInvalidLibraryQuery):
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", err.Error())
+	case errors.Is(err, domain.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "folder or user was not found")
+	case errors.Is(err, domain.ErrConflict), errors.Is(err, service.ErrFolderNotEmpty), errors.Is(err, service.ErrInvalidFolderMove):
+		writeError(w, http.StatusConflict, "folder_conflict", "the folder operation conflicts with its current contents or hierarchy")
+	default:
+		h.logger.Error("folder operation failed", "operation", operation, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "unable to "+operation+" folder")
+	}
+	return true
 }
 
 func (h *Handler) createAnonymousTransfer(w http.ResponseWriter, r *http.Request) {

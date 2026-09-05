@@ -21,6 +21,7 @@ type Config struct {
 	SignedURLTTL              time.Duration
 	MaxAnonymousFileBytes     int64
 	MaxPersistentFileBytes    int64
+	MaxPersistentStorageBytes int64
 	MaxAnonymousTransferBytes int64
 	MaxAnonymousFiles         int
 }
@@ -47,6 +48,13 @@ func Load() (Config, error) {
 	maxPersistentFileBytes, err := int64Value("MAX_PERSISTENT_FILE_BYTES", 5*1024*1024*1024)
 	if err != nil {
 		return Config{}, err
+	}
+	maxPersistentStorageBytes, err := int64Value("MAX_PERSISTENT_STORAGE_BYTES", 25*1024*1024*1024)
+	if err != nil {
+		return Config{}, err
+	}
+	if maxPersistentStorageBytes < maxPersistentFileBytes {
+		return Config{}, fmt.Errorf("MAX_PERSISTENT_STORAGE_BYTES must be at least MAX_PERSISTENT_FILE_BYTES")
 	}
 	maxFiles, err := intValue("MAX_ANONYMOUS_FILES", 10)
 	if err != nil {
@@ -76,6 +84,7 @@ func Load() (Config, error) {
 		SignedURLTTL:              signedURLTTL,
 		MaxAnonymousFileBytes:     maxFileBytes,
 		MaxPersistentFileBytes:    maxPersistentFileBytes,
+		MaxPersistentStorageBytes: maxPersistentStorageBytes,
 		MaxAnonymousTransferBytes: maxTransferBytes,
 		MaxAnonymousFiles:         maxFiles,
 	}, nil

@@ -50,7 +50,8 @@ func run(logger *slog.Logger) error {
 		storageBackend = gcsBackend
 	}
 	transfers := service.NewTransfers(db, storageBackend, time.Now, cfg.AnonymousFileTTL, cfg.SignedURLTTL, cfg.MaxAnonymousFileBytes)
-	files := service.NewFiles(db, storageBackend, time.Now, cfg.SignedURLTTL, cfg.MaxPersistentFileBytes)
+	files := service.NewFiles(db, storageBackend, time.Now, cfg.SignedURLTTL, cfg.MaxPersistentFileBytes, cfg.MaxPersistentStorageBytes)
+	folders := service.NewFolders(db, time.Now, cfg.MaxPersistentStorageBytes)
 	users := service.NewUsers(db, time.Now)
 	var tokenVerifier identity.Verifier
 	if cfg.FirebaseProjectID != "" {
@@ -72,7 +73,7 @@ func run(logger *slog.Logger) error {
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewHandler(transfers, bundles, files, users, tokenVerifier, db, logger),
+		Handler:           api.NewHandler(transfers, bundles, files, users, tokenVerifier, db, logger, folders),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

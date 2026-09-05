@@ -1,5 +1,6 @@
 export type FileRecord = {
-  id: string;
+	id: string;
+	folderId?: string;
   transferId?: string;
   originalName: string;
   mimeType: string;
@@ -20,7 +21,8 @@ export type UserRecord = {
 export type ShareRecord = {
   id: string;
   shortCode: string;
-  fileId?: string;
+	fileId?: string;
+	folderId?: string;
   transferId?: string;
   createdAt: string;
   expiresAt?: string;
@@ -53,13 +55,45 @@ export type OwnedFileRecord = {
 };
 
 export type FileLibrarySummary = {
-  fileCount: number;
-  totalBytes: number;
+	fileCount: number;
+	totalBytes: number;
+	quotaBytes?: number;
 };
 
 export type FileLibraryResult = {
   files: OwnedFileRecord[];
   summary: FileLibrarySummary;
+};
+
+export type FolderRole = "OWNER" | "VIEWER";
+
+export type FolderRecord = {
+	id: string;
+	ownerId: string;
+	parentFolderId?: string;
+	name: string;
+	createdAt: string;
+};
+
+export type FolderAccess = {
+	folder: FolderRecord;
+	role: FolderRole;
+	owner: UserRecord;
+};
+
+export type FolderMember = {
+	user: UserRecord;
+	role: "VIEWER";
+	createdAt: string;
+};
+
+export type FolderContents = {
+	current?: FolderAccess;
+	breadcrumbs: FolderRecord[];
+	folders: FolderAccess[];
+	files: OwnedFileRecord[];
+	summary: FileLibrarySummary;
+	nextCursor?: string;
 };
 
 export type PersistentShareExpiration = "24h" | "7d" | "30d" | "never";

@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/components/auth-context";
-import { FolderIcon, LinkIcon, UploadIcon, UsersIcon } from "@/components/icons";
+import { LinkIcon, UploadIcon } from "@/components/icons";
 import { PersistentFileLibrary } from "@/components/persistent-file-library";
 import { UploadWorkspace } from "@/components/upload-workspace";
 
@@ -50,25 +50,6 @@ export function AppDashboard() {
 
       <section className="library-panel" aria-labelledby="library-title">
         <PersistentFileLibrary />
-
-        <div className="workspace-columns">
-          <article className="workspace-summary-card">
-            <span className="summary-icon"><FolderIcon /></span>
-            <div>
-              <h3>Folders</h3>
-              <p>Organize your persistent files without changing how they are stored.</p>
-            </div>
-            <span className="coming-label">Coming next</span>
-          </article>
-          <article className="workspace-summary-card">
-            <span className="summary-icon apricot"><UsersIcon /></span>
-            <div>
-              <h3>Shared with you</h3>
-              <p>Read-only folders shared by other Eterealink users will show up here.</p>
-            </div>
-            <span className="coming-label">Coming next</span>
-          </article>
-        </div>
       </section>
 
       <section id="temporary-transfer" className="temporary-section" aria-labelledby="temporary-title">

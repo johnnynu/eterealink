@@ -6,6 +6,9 @@ import type {
   FileDownloadResult,
   FileLibraryResult,
   FileRecord,
+	FolderContents,
+	FolderMember,
+	FolderRecord,
   PersistentShareExpiration,
   ShareResult,
   UploadTarget,
@@ -76,7 +79,7 @@ function bearerHeaders(idToken: string, contentType = false) {
   };
 }
 
-export async function createPersistentUpload(file: File, idToken: string): Promise<CreatePersistentUploadResult> {
+export async function createPersistentUpload(file: File, idToken: string, folderID?: string): Promise<CreatePersistentUploadResult> {
   const response = await fetch("/api/v1/files", {
     method: "POST",
     headers: bearerHeaders(idToken, true),
@@ -84,9 +87,81 @@ export async function createPersistentUpload(file: File, idToken: string): Promi
       originalName: file.name,
       mimeType: file.type || "application/octet-stream",
       sizeBytes: file.size,
+			folderId: folderID,
     }),
   });
   return parseResponse<CreatePersistentUploadResult>(response);
+}
+
+export type FolderListQuery = {
+	search?: string;
+	sort?: "newest" | "oldest" | "name" | "size";
+	filter?: "all" | "shared";
+	limit?: number;
+	cursor?: string;
+};
+
+export async function listFolderContents(idToken: string, folderID?: string, scope: "owned" | "shared" = "owned", query: FolderListQuery = {}): Promise<FolderContents> {
+	const parameters = new URLSearchParams();
+	if (!folderID) parameters.set("scope", scope);
+	if (query.search) parameters.set("q", query.search);
+	if (query.sort) parameters.set("sort", query.sort);
+	if (query.filter && query.filter !== "all") parameters.set("filter", query.filter);
+	if (query.limit) parameters.set("limit", String(query.limit));
+	if (query.cursor) parameters.set("cursor", query.cursor);
+	const base = folderID ? `/api/v1/folders/${encodeURIComponent(folderID)}` : "/api/v1/folders";
+	const path = `${base}?${parameters.toString()}`;
+	const response = await fetch(path, { headers: bearerHeaders(idToken), cache: "no-store" });
+	return parseResponse<FolderContents>(response);
+}
+
+export async function createFolder(name: string, parentFolderID: string | undefined, idToken: string): Promise<FolderRecord> {
+	const response = await fetch("/api/v1/folders", {
+		method: "POST", headers: bearerHeaders(idToken, true), body: JSON.stringify({ name, parentFolderId: parentFolderID }),
+	});
+	const result = await parseResponse<{ folder: FolderRecord }>(response);
+	return result.folder;
+}
+
+export async function updateFolder(folderID: string, name: string, parentFolderID: string | undefined, idToken: string): Promise<FolderRecord> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}`, {
+		method: "PATCH", headers: bearerHeaders(idToken, true), body: JSON.stringify({ name, parentFolderId: parentFolderID }),
+	});
+	const result = await parseResponse<{ folder: FolderRecord }>(response);
+	return result.folder;
+}
+
+export async function deleteFolder(folderID: string, idToken: string): Promise<void> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}`, { method: "DELETE", headers: bearerHeaders(idToken) });
+	if (!response.ok) await parseResponse(response);
+}
+
+export async function movePersistentFiles(fileIDs: string[], folderID: string | undefined, idToken: string): Promise<void> {
+	const response = await fetch("/api/v1/files/move", {
+		method: "PATCH", headers: bearerHeaders(idToken, true), body: JSON.stringify({ fileIds: fileIDs, folderId: folderID }),
+	});
+	if (!response.ok) await parseResponse(response);
+}
+
+export async function listFolderMembers(folderID: string, idToken: string): Promise<FolderMember[]> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}/members`, { headers: bearerHeaders(idToken), cache: "no-store" });
+	const result = await parseResponse<{ members: FolderMember[] }>(response);
+	return result.members;
+}
+
+export async function addFolderMember(folderID: string, email: string, idToken: string): Promise<FolderMember> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}/members`, {
+		method: "POST", headers: bearerHeaders(idToken, true), body: JSON.stringify({ email }),
+	});
+	const result = await parseResponse<{ member: FolderMember }>(response);
+	return result.member;
+}
+
+export async function removeFolderMember(folderID: string, userID: string, idToken: string): Promise<void> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}/members/${encodeURIComponent(userID)}`, {
+		method: "DELETE", headers: bearerHeaders(idToken),
+	});
+	if (!response.ok) await parseResponse(response);
 }
 
 export async function completePersistentUpload(fileID: string, idToken: string): Promise<FileRecord> {
