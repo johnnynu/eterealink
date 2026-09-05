@@ -10,7 +10,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 6.9—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, safe browser previews, realtime refreshes, and profiles—are complete.
+Phases 1 through 7—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, safe browser previews, realtime refreshes, profiles, and production containerization—are complete.
 
 Implemented:
 
@@ -54,6 +54,8 @@ Implemented:
 - Escaped text rendering, cross-origin PDF embedding, a server-side media allowlist, and generic fallback for unsupported files
 - Preview selection for multi-file transfers and an authenticated preview dialog for private or shared-folder files
 - Original-quality video playback with Eterealink controls for seeking, ten-second skips, volume, playback speed, picture-in-picture, fullscreen, source-resolution display, buffering and codec feedback, auto-hiding controls, and remembered preferences
+- Multi-stage, non-root production images for the Go API/migration runner and standalone Next.js server
+- A health-gated Docker Compose stack that runs PostgreSQL, one-shot migrations, the API, and the frontend in dependency order
 
 The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
 
@@ -222,6 +224,18 @@ Run the test suite with:
 make test
 ```
 
+### Run the production containers locally
+
+Build and start the complete stack with:
+
+```bash
+make containers-up
+```
+
+The frontend is available at `http://localhost:3000` and the API at `http://localhost:8080`. Compose waits for PostgreSQL, applies all migrations once, starts the API, and then starts the frontend after the API becomes healthy. Set `FRONTEND_PORT` or `API_PORT` before starting Compose if either host port is already occupied. Stop the stack with `make containers-down`; the PostgreSQL volume is retained.
+
+Values prefixed with `NEXT_PUBLIC_` and `API_BASE_URL` are compiled into the frontend image by Next.js. Set them in the root `.env` before building the image. Backend configuration is supplied to the API container at runtime. The default `development` storage backend supports metadata flows but cannot accept file bytes; real GCS transfers also require application-default credentials inside the API container.
+
 To complete a browser upload, use the real GCS backend by following the [Phase 2 GCP setup guide](./docs/setup/gcp-phase2-gcs.md). Multi-file uploads and ZIP output use that same bucket; no second bucket is required. In local development the API process runs the archive worker. It can be separated into a Cloud Run Job when the application is deployed. The default `development` backend remains available for metadata-only work and unit tests, but intentionally cannot accept file bytes.
 
 To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup/firebase-phase4.md). Authentication is optional in local development: when Firebase variables are absent, anonymous transfers continue to work and the sign-in control stays hidden.
@@ -241,7 +255,8 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 6. Previews ✅ | Browser previews with a safe generic fallback |
 | 6.5. Realtime collaboration ✅ | Authenticated SSE folder invalidation, PostgreSQL notifications, and reconnect-safe refreshes |
 | 6.9. Profiles ✅ | Optional unique display names, Google-name fallback, account editing, and realtime collaborator refreshes |
-| 7-10. Cloud platform | Containers, Cloud Run, private networking, and Terraform |
+| 7. Containers ✅ | Multi-stage non-root images, standalone frontend output, migration job, health checks, and a production-like local Compose stack |
+| 8-10. Cloud platform | Cloud Run, private networking, and Terraform |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |
 
 The product MVP is complete. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.

@@ -15,6 +15,63 @@ services:
       timeout: 3s
       retries: 10
 
+  migrate:
+    build:
+      context: ./backend
+    environment:
+      APP_ENV: container
+      DATABASE_URL: postgres://eterealink:eterealink@postgres:5432/eterealink?sslmode=disable
+    command: ["/app/migrate", "up"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      APP_ENV: container
+      HTTP_ADDR: :8080
+      DATABASE_URL: postgres://eterealink:eterealink@postgres:5432/eterealink?sslmode=disable
+      PUBLIC_API_URL: http://localhost:${API_PORT:-8080}
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-development}
+      GCS_BUCKET: ${GCS_BUCKET:-}
+      GCS_SIGNING_SERVICE_ACCOUNT: ${GCS_SIGNING_SERVICE_ACCOUNT:-}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      ANONYMOUS_FILE_TTL: ${ANONYMOUS_FILE_TTL:-24h}
+      SIGNED_URL_TTL: ${SIGNED_URL_TTL:-15m}
+      MAX_ANONYMOUS_FILE_BYTES: ${MAX_ANONYMOUS_FILE_BYTES:-1073741824}
+      MAX_PERSISTENT_FILE_BYTES: ${MAX_PERSISTENT_FILE_BYTES:-5368709120}
+      MAX_PERSISTENT_STORAGE_BYTES: ${MAX_PERSISTENT_STORAGE_BYTES:-26843545600}
+      MAX_ANONYMOUS_TRANSFER_BYTES: ${MAX_ANONYMOUS_TRANSFER_BYTES:-1073741824}
+      MAX_ANONYMOUS_FILES: ${MAX_ANONYMOUS_FILES:-10}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        API_BASE_URL: http://api:8080
+        NEXT_PUBLIC_MAX_UPLOAD_BYTES: ${NEXT_PUBLIC_MAX_UPLOAD_BYTES:-1073741824}
+        NEXT_PUBLIC_MAX_PERSISTENT_FILE_BYTES: ${NEXT_PUBLIC_MAX_PERSISTENT_FILE_BYTES:-5368709120}
+        NEXT_PUBLIC_MAX_TRANSFER_BYTES: ${NEXT_PUBLIC_MAX_TRANSFER_BYTES:-1073741824}
+        NEXT_PUBLIC_MAX_FILES: ${NEXT_PUBLIC_MAX_FILES:-10}
+        NEXT_PUBLIC_FIREBASE_API_KEY: ${NEXT_PUBLIC_FIREBASE_API_KEY:-}
+        NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN:-}
+        NEXT_PUBLIC_FIREBASE_PROJECT_ID: ${NEXT_PUBLIC_FIREBASE_PROJECT_ID:-}
+        NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ${NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET:-}
+        NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:-}
+        NEXT_PUBLIC_FIREBASE_APP_ID: ${NEXT_PUBLIC_FIREBASE_APP_ID:-}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   eterealink-postgres:
-
