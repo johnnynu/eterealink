@@ -237,7 +237,7 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 5.1. Collaboration ✅ | Scalable access management, personalized expiring invites, Contributor uploads, uploader attribution, and uploader-owned file controls |
 | 5.5. Landing page ✅ | Introduce account benefits alongside anonymous sharing, with a Google sign-in call to action and responsive feature section |
 | 6. Previews ✅ | Browser previews with a safe generic fallback |
-| 6.5. Realtime collaboration | Authenticated SSE folder invalidation, PostgreSQL notifications, and reconnect-safe refreshes |
+| 6.5. Realtime collaboration ✅ | Authenticated SSE folder invalidation, PostgreSQL notifications, and reconnect-safe refreshes |
 | 7-10. Cloud platform | Containers, Cloud Run, private networking, and Terraform |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed for a post-preview Phase 6.5 collaboration milestone. Realtime delivery is intentionally outside Phase 5.1.
+Accepted and implemented in Phase 6.5. Realtime delivery remains intentionally separate from the Phase 5.1 authorization model.
 
 ## Context
 
@@ -10,12 +10,12 @@ Phase 5.1 establishes folder membership, contributor permissions, invite links, 
 
 ## Decision
 
-- Use authenticated Server-Sent Events because folder updates are primarily server-to-browser notifications. Continue using ordinary API requests and signed Cloud Storage URLs for mutations and file bytes.
+- Use authenticated Server-Sent Events because folder updates are primarily server-to-browser notifications. The browser consumes the SSE response with `fetch` streaming so it can send the Firebase bearer token in an authorization header. Continue using ordinary API requests and signed Cloud Storage URLs for mutations and file bytes.
 - Add an endpoint such as `GET /v1/folders/{id}/events`. Authorize the initial connection against inherited folder membership, send heartbeat frames, and reconnect clients with exponential backoff.
 - Send small invalidation events such as `folder.changed`, never complete file metadata. On receipt or reconnection, the browser refetches authoritative folder contents and preserves its local search, selection, pagination, and panel state.
-- Initially use PostgreSQL `LISTEN`/`NOTIFY` through Cloud SQL. Emit notifications within the same transactions that complete, move, remove, or delete files and that change membership. Notifications are delivered only after commit, and every listening API session can receive them.
+- Initially use PostgreSQL `LISTEN`/`NOTIFY` through Cloud SQL. Database triggers emit folder invalidations inside the same transactions that change visible files, folders, shares, invitations, or membership. Notifications are delivered only after commit, and every listening API session can receive them.
 - Maintain one database listener per Cloud Run instance and fan out authorized events only to that instance's connected browsers. Do not dedicate one PostgreSQL connection per browser.
-- Rotate streaming requests before Cloud Run's request timeout and have clients reconnect automatically. A reconnect always begins with a normal folder refetch so a missed notification cannot leave the UI permanently stale.
+- Rotate streaming requests after four minutes and thirty seconds, before Cloud Run's default request timeout, and have clients reconnect automatically. A reconnect always begins with a normal folder refetch so a missed notification cannot leave the UI permanently stale. Streams also reconnect after each invalidation so authorization and ancestor subscriptions are rebuilt after access and folder hierarchy changes.
 - If connection volume or notification traffic outgrows Cloud SQL signaling, introduce Memorystore for Redis Pub/Sub as the cross-instance event bus. Each Cloud Run instance subscribes and broadcasts locally.
 - If events later drive durable workflows, audit history, notifications, or analytics, add a transactional PostgreSQL outbox and publish it to Google Cloud Pub/Sub. Redis/SSE remains the low-latency UI path; the outbox and Pub/Sub become the reliable processing path.
 

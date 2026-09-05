@@ -49,6 +49,31 @@ func (p *Postgres) Ping(ctx context.Context) error {
 	return nil
 }
 
+func (p *Postgres) ListenFolderEvents(ctx context.Context, publish func(folderID string)) error {
+	return p.listenFolderEvents(ctx, nil, publish)
+}
+
+func (p *Postgres) listenFolderEvents(ctx context.Context, ready func(), publish func(folderID string)) error {
+	connection, err := p.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire folder event listener: %w", err)
+	}
+	defer connection.Release()
+	if _, err := connection.Exec(ctx, `LISTEN eterealink_folder_events`); err != nil {
+		return fmt.Errorf("listen for folder events: %w", err)
+	}
+	if ready != nil {
+		ready()
+	}
+	for {
+		notification, err := connection.Conn().WaitForNotification(ctx)
+		if err != nil {
+			return fmt.Errorf("wait for folder event: %w", err)
+		}
+		publish(notification.Payload)
+	}
+}
+
 func (p *Postgres) UpsertUser(ctx context.Context, user domain.User) (domain.User, error) {
 	row := p.pool.QueryRow(ctx, `
 		INSERT INTO users (id, firebase_uid, email, display_name, created_at)

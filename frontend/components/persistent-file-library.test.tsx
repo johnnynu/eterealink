@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
 	removeFolderMember: vi.fn(),
 	revokeFolderInvite: vi.fn(),
   revokePersistentFileShare: vi.fn(),
+	streamFolderEvents: vi.fn(),
   uploadResumable: vi.fn(),
 	updateFolder: vi.fn(),
 }));
@@ -61,6 +62,9 @@ function library(files: Array<{ file: FileRecord; uploaderName?: string; share?:
 
 beforeEach(() => {
 	window.history.replaceState(null, "", "/app");
+	api.streamFolderEvents.mockImplementation((_token, _folderID, signal: AbortSignal) => new Promise<void>((resolve) => {
+		signal.addEventListener("abort", () => resolve(), { once: true });
+	}));
 });
 
 afterEach(() => {
@@ -325,6 +329,53 @@ describe("PersistentFileLibrary", () => {
 		expect(container.querySelector("#library-title")?.textContent).toBe("Final");
 		expect(container.querySelector(".folder-breadcrumbs")?.textContent).toContain("My files/ Project/ Designs/ Final");
 		expect(window.location.search).toBe("?folder=final-folder");
+	});
+
+	it("refreshes an open folder after a realtime invalidation without clearing selection", async () => {
+		const folder = {
+			folder: { id: "folder-1", ownerId: "user-1", name: "Launch", createdAt: "2026-09-04T12:00:00Z" },
+			role: "OWNER" as const,
+			owner: signedInUser,
+		};
+		const updatedFile = { ...savedFile, id: "file-2", originalName: "new-notes.txt" };
+		window.history.replaceState(null, "", "/app?folder=folder-1");
+		api.listFolderContents
+			.mockResolvedValueOnce({ ...library([{ file: savedFile }]), current: folder, breadcrumbs: [folder.folder] })
+			.mockResolvedValueOnce({ ...library([{ file: savedFile }]), current: folder, breadcrumbs: [folder.folder] })
+			.mockResolvedValueOnce({ ...library([{ file: savedFile }, { file: updatedFile }]), current: folder, breadcrumbs: [folder.folder] });
+		let sendChange: (() => void) | undefined;
+		api.streamFolderEvents.mockImplementation((_token, _folderID, signal: AbortSignal, _onOpen, onChange) => {
+			sendChange = () => onChange({ folderId: "folder-1" });
+			return new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+		});
+
+		const container = await renderLibrary();
+		await act(async () => {
+			await vi.waitFor(() => expect(api.streamFolderEvents).toHaveBeenCalled());
+		});
+		expect(document.querySelector(".folder-update-toast")).toBeNull();
+		const selection = container.querySelector<HTMLInputElement>('input[aria-label="Select project-notes.txt"]')!;
+		act(() => selection.click());
+
+		await act(async () => {
+			sendChange?.();
+			await vi.waitFor(() => expect(api.listFolderContents).toHaveBeenCalledTimes(2));
+		});
+		expect(document.querySelector(".folder-update-toast")).toBeNull();
+
+		await act(async () => {
+			sendChange?.();
+			await vi.waitFor(() => expect(api.listFolderContents).toHaveBeenCalledTimes(3));
+		});
+		expect(container.textContent).toContain("new-notes.txt");
+		expect(document.querySelector(".folder-update-toast strong")?.textContent).toBe("Folder updated");
+		expect(document.querySelector(".folder-update-toast small")?.textContent).toBe("Latest changes are now visible.");
+
+		expect(api.listFolderContents).toHaveBeenLastCalledWith("verified-token", "folder-1", "owned", {
+			search: "", sort: "newest", filter: "all", limit: 10, cursor: "",
+		});
+		expect(container.querySelector<HTMLInputElement>('input[aria-label="Select project-notes.txt"]')?.checked).toBe(true);
+		expect(container.textContent).toContain("1 selected");
 	});
 
 	it("updates the URL during folder navigation and responds to browser history", async () => {

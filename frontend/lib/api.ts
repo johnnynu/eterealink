@@ -104,6 +104,10 @@ export type FolderListQuery = {
 	cursor?: string;
 };
 
+export type FolderEvent = {
+	folderId: string;
+};
+
 export async function listFolderContents(idToken: string, folderID?: string, scope: "owned" | "shared" = "owned", query: FolderListQuery = {}): Promise<FolderContents> {
 	const parameters = new URLSearchParams();
 	if (!folderID) parameters.set("scope", scope);
@@ -116,6 +120,49 @@ export async function listFolderContents(idToken: string, folderID?: string, sco
 	const path = `${base}?${parameters.toString()}`;
 	const response = await fetch(path, { headers: bearerHeaders(idToken), cache: "no-store" });
 	return parseResponse<FolderContents>(response);
+}
+
+export async function streamFolderEvents(
+	idToken: string,
+	folderID: string,
+	signal: AbortSignal,
+	onOpen: () => void,
+	onChange: (event: FolderEvent) => void,
+): Promise<void> {
+	const response = await fetch(`/api/v1/folders/${encodeURIComponent(folderID)}/events`, {
+		headers: { ...bearerHeaders(idToken), Accept: "text/event-stream" },
+		cache: "no-store",
+		signal,
+	});
+	if (!response.ok) await parseResponse(response);
+	if (!response.body) throw new APIError("The realtime connection could not be opened.", 502, "stream_unavailable");
+
+	onOpen();
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	for (;;) {
+		const { value, done } = await reader.read();
+		buffer += decoder.decode(value, { stream: !done });
+		buffer = buffer.replaceAll("\r\n", "\n");
+		let boundary = buffer.indexOf("\n\n");
+		while (boundary >= 0) {
+			const frame = buffer.slice(0, boundary);
+			buffer = buffer.slice(boundary + 2);
+			let eventName = "message";
+			const data: string[] = [];
+			for (const line of frame.split("\n")) {
+				if (line.startsWith("event:")) eventName = line.slice(6).trimStart();
+				if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+			}
+			if (eventName === "folder.changed" && data.length > 0) {
+				const event = JSON.parse(data.join("\n")) as FolderEvent;
+				if (event.folderId) onChange(event);
+			}
+			boundary = buffer.indexOf("\n\n");
+		}
+		if (done) return;
+	}
 }
 
 export async function createFolder(name: string, parentFolderID: string | undefined, idToken: string): Promise<FolderRecord> {

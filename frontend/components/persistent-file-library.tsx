@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useAuth } from "@/components/auth-context";
 import { CopyIcon, DownloadIcon, FileIcon, FolderIcon, LinkIcon, UploadIcon, UsersIcon } from "@/components/icons";
 import { FilePreview } from "@/components/file-preview";
@@ -24,6 +25,7 @@ import {
   removeFolderMember,
   revokeFolderInvite,
   revokePersistentFileShare,
+	streamFolderEvents,
   updateFolder,
   uploadResumable,
 } from "@/lib/api";
@@ -88,6 +90,21 @@ function writeLibraryLocation(folderID: string | undefined, scope: LibraryScope,
 	window.history[mode === "push" ? "pushState" : "replaceState"](null, "", nextURL);
 }
 
+function folderSnapshot(
+	current: FolderAccess | null,
+	breadcrumbs: FolderRecord[],
+	folders: FolderAccess[],
+	files: OwnedFileRecord[] | null,
+	summary: FileLibrarySummary | null,
+	nextCursor: string,
+) {
+	return JSON.stringify({ current, breadcrumbs, folders, files, summary, nextCursor });
+}
+
+function folderAccessSnapshot(members: FolderMember[], invites: FolderInvite[]) {
+	return JSON.stringify({ members, invites });
+}
+
 export function PersistentFileLibrary() {
   const { getIDToken, user } = useAuth();
   const [files, setFiles] = useState<OwnedFileRecord[] | null>(null);
@@ -131,10 +148,41 @@ export function PersistentFileLibrary() {
 	const [folderBusy, setFolderBusy] = useState(false);
 	const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
 	const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+	const [folderUpdateToast, setFolderUpdateToast] = useState(0);
 	const activeUpload = useRef<{ id: string; abort: () => void } | null>(null);
 	const uploadSequence = useRef(0);
 	const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const openLocationRef = useRef<((folderID?: string, nextScope?: LibraryScope, cursor?: string, overrides?: OpenLocationOptions, resetCursor?: boolean) => Promise<void>) | null>(null);
+	const refreshCurrentFolderRef = useRef<((announceChange?: boolean) => Promise<void>) | null>(null);
+	const backgroundRefreshInFlight = useRef(false);
+	const backgroundRefreshPending = useRef(false);
+	const backgroundRefreshPendingNotice = useRef(false);
+	const folderUpdateToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const displayedFolderSnapshot = useRef("");
+	const displayedAccessSnapshot = useRef("");
+	const locationVersion = useRef(0);
+	const libraryView = useRef({
+		folderID: undefined as string | undefined,
+		scope: "owned" as LibraryScope,
+		search: "",
+		sort: "newest" as FileSort,
+		filter: "all" as FileFilter,
+		cursor: "",
+		memberPanelOpen: false,
+		role: undefined as FolderAccess["role"] | undefined,
+	});
+	libraryView.current = {
+		folderID: currentFolder?.folder.id,
+		scope,
+		search: searchQuery,
+		sort,
+		filter,
+		cursor: cursorHistory[page - 1] ?? "",
+		memberPanelOpen,
+		role: currentFolder?.role,
+	};
+	displayedFolderSnapshot.current = folderSnapshot(currentFolder, breadcrumbs, folders, files, summary, nextCursor);
+	displayedAccessSnapshot.current = folderAccessSnapshot(members, folderInvites);
 	const canUpload = scope === "owned" || (scope === "shared" && currentFolder?.role === "CONTRIBUTOR");
 
   useEffect(() => {
@@ -196,6 +244,7 @@ export function PersistentFileLibrary() {
     return () => {
 		active = false;
 		if (searchTimer.current) clearTimeout(searchTimer.current);
+		if (folderUpdateToastTimer.current) clearTimeout(folderUpdateToastTimer.current);
 	};
   }, [getIDToken]);
 
@@ -215,6 +264,8 @@ export function PersistentFileLibrary() {
 		overrides: OpenLocationOptions = {},
 		resetCursor = true,
 	) {
+		const requestVersion = ++locationVersion.current;
+		dismissFolderUpdateToast();
 		if (searchTimer.current) {
 			clearTimeout(searchTimer.current);
 			searchTimer.current = null;
@@ -231,6 +282,7 @@ export function PersistentFileLibrary() {
 				limit: FILES_PER_PAGE,
 				cursor,
 			});
+			if (requestVersion !== locationVersion.current) return;
 			setScope(nextScope);
 			setCurrentFolder(result.current ?? null);
 			setEditFolderName(result.current?.folder.name ?? "");
@@ -251,6 +303,7 @@ export function PersistentFileLibrary() {
 				setCursorHistory([""]);
 			}
 		} catch (loadError) {
+			if (requestVersion !== locationVersion.current) return;
 			setFiles([]);
 			setFolders([]);
 			setError(errorMessage(loadError, "This folder could not be loaded. Please try again."));
@@ -258,6 +311,162 @@ export function PersistentFileLibrary() {
 	}
 
 	openLocationRef.current = openLocation;
+
+	async function refreshCurrentFolder(announceChange = false) {
+		if (backgroundRefreshInFlight.current) {
+			backgroundRefreshPending.current = true;
+			backgroundRefreshPendingNotice.current ||= announceChange;
+			return;
+		}
+		const view = libraryView.current;
+		if (!view.folderID) return;
+		const requestVersion = locationVersion.current;
+		backgroundRefreshInFlight.current = true;
+		try {
+			const token = await getIDToken();
+			const result = await listFolderContents(token, view.folderID, view.scope, {
+				search: view.search,
+				sort: view.sort,
+				filter: view.filter,
+				limit: FILES_PER_PAGE,
+				cursor: view.cursor,
+			});
+			if (requestVersion !== locationVersion.current || libraryView.current.folderID !== view.folderID) return;
+			const nextCurrent = result.current ?? null;
+			const nextBreadcrumbs = result.breadcrumbs ?? [];
+			const nextFolders = result.folders ?? [];
+			const nextFiles = result.files ?? [];
+			const nextSummary = result.summary ?? { fileCount: 0, totalBytes: 0 };
+			const nextPageCursor = result.nextCursor ?? "";
+			let changed = displayedFolderSnapshot.current !== folderSnapshot(
+				nextCurrent,
+				nextBreadcrumbs,
+				nextFolders,
+				nextFiles,
+				nextSummary,
+				nextPageCursor,
+			);
+			setScope(view.scope);
+			setCurrentFolder(nextCurrent);
+			setBreadcrumbs(nextBreadcrumbs);
+			setFolders(nextFolders);
+			setFiles(nextFiles);
+			setSummary(nextSummary);
+			setNextCursor(nextPageCursor);
+			const visibleIDs = new Set(nextFiles.map((entry) => entry.file.id));
+			setSelectedIDs((current) => current.filter((id) => visibleIDs.has(id)));
+
+			if (view.memberPanelOpen && view.role === "OWNER") {
+				const [nextMembers, nextInvites] = await Promise.all([
+					listFolderMembers(view.folderID, token),
+					listFolderInvites(view.folderID, token),
+				]);
+				if (requestVersion === locationVersion.current && libraryView.current.folderID === view.folderID) {
+					changed ||= displayedAccessSnapshot.current !== folderAccessSnapshot(nextMembers, nextInvites);
+					setMembers(nextMembers);
+					setFolderInvites(nextInvites);
+				}
+			}
+			if (announceChange && changed) showFolderUpdateToast();
+		} catch (refreshError) {
+			if (requestVersion !== locationVersion.current || libraryView.current.folderID !== view.folderID) return;
+			if (refreshError instanceof APIError && (refreshError.status === 403 || refreshError.status === 404)) {
+				await openLocationRef.current?.(undefined, view.scope, "", {
+					search: "", sort: "newest", filter: "all", historyMode: "replace",
+				});
+				setError("This folder is no longer available to you.");
+			}
+		} finally {
+			backgroundRefreshInFlight.current = false;
+			if (backgroundRefreshPending.current) {
+				const announcePendingChange = backgroundRefreshPendingNotice.current;
+				backgroundRefreshPending.current = false;
+				backgroundRefreshPendingNotice.current = false;
+				void refreshCurrentFolderRef.current?.(announcePendingChange);
+			}
+		}
+	}
+
+	refreshCurrentFolderRef.current = refreshCurrentFolder;
+
+	function dismissFolderUpdateToast() {
+		if (folderUpdateToastTimer.current) {
+			clearTimeout(folderUpdateToastTimer.current);
+			folderUpdateToastTimer.current = null;
+		}
+		setFolderUpdateToast(0);
+	}
+
+	function showFolderUpdateToast() {
+		if (folderUpdateToastTimer.current) clearTimeout(folderUpdateToastTimer.current);
+		setFolderUpdateToast((current) => current + 1);
+		folderUpdateToastTimer.current = setTimeout(() => {
+			setFolderUpdateToast(0);
+			folderUpdateToastTimer.current = null;
+		}, 4_200);
+	}
+
+	useEffect(() => {
+		const folderID = currentFolder?.folder.id;
+		if (!folderID) return;
+		let stopped = false;
+		let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+		let activeController: AbortController | null = null;
+
+		const waitToReconnect = (delay: number) => new Promise<void>((resolve) => {
+			reconnectTimer = setTimeout(resolve, delay);
+		});
+		const run = async () => {
+			let failedAttempts = 0;
+			while (!stopped) {
+				activeController = new AbortController();
+				let opened = false;
+				let changed = false;
+				const connectedAt = Date.now();
+				try {
+					const token = await getIDToken();
+					await streamFolderEvents(
+						token,
+						folderID,
+						activeController.signal,
+						() => {
+							opened = true;
+							failedAttempts = 0;
+							void refreshCurrentFolderRef.current?.(true);
+						},
+						() => {
+							changed = true;
+							void refreshCurrentFolderRef.current?.(true);
+						},
+					);
+				} catch (streamError) {
+					if (activeController.signal.aborted || stopped) return;
+					if (streamError instanceof APIError && (streamError.status === 403 || streamError.status === 404)) {
+						void refreshCurrentFolderRef.current?.();
+						return;
+					}
+				}
+				if (stopped) return;
+				const wasStable = opened && Date.now() - connectedAt > 30_000;
+				if (changed || wasStable) continue;
+				const delay = Math.min(30_000, 1_000 * 2 ** failedAttempts) + Math.floor(Math.random() * 250);
+				failedAttempts++;
+				await waitToReconnect(delay);
+			}
+		};
+		void run();
+
+		function refreshWhenVisible() {
+			if (document.visibilityState === "visible") void refreshCurrentFolderRef.current?.(true);
+		}
+		document.addEventListener("visibilitychange", refreshWhenVisible);
+		return () => {
+			stopped = true;
+			activeController?.abort();
+			if (reconnectTimer) clearTimeout(reconnectTimer);
+			document.removeEventListener("visibilitychange", refreshWhenVisible);
+		};
+	}, [currentFolder?.folder.id, getIDToken]);
 
 	useEffect(() => {
 		function restoreLocation() {
@@ -710,6 +919,13 @@ export function PersistentFileLibrary() {
       onDrop={dropFiles}
     >
       {dragging && <div className="library-drop-overlay" aria-hidden="true"><UploadIcon /> Drop files to add them</div>}
+	  {folderUpdateToast > 0 && createPortal(
+		<div key={folderUpdateToast} className="folder-update-toast" role="status" aria-live="polite" aria-atomic="true">
+			<FolderIcon />
+			<span><strong>Folder updated</strong><small>Latest changes are now visible.</small></span>
+		</div>,
+		document.body,
+	  )}
 		<nav className="library-scope" aria-label="Library location">
 			<button type="button" aria-pressed={scope === "owned"} onClick={() => openLocation(undefined, "owned", "", { historyMode: "push" })}>My files</button>
 			<button type="button" aria-pressed={scope === "shared"} onClick={() => openLocation(undefined, "shared", "", { historyMode: "push" })}>Shared with me</button>
@@ -736,7 +952,7 @@ export function PersistentFileLibrary() {
             {summary === null
               ? "Loading storage usage…"
               : `${summary.fileCount} ${summary.fileCount === 1 ? "file" : "files"} · ${formatBytes(summary.totalBytes)} stored`}
-          </p>
+		  </p>
 		  {summary?.quotaBytes ? <div className="storage-capacity" title={`${formatBytes(summary.totalBytes)} of ${formatBytes(summary.quotaBytes)}`}><span style={{ width: `${Math.min(100, (summary.totalBytes / summary.quotaBytes) * 100)}%` }} /></div> : null}
         </div>
 		{canUpload && <label className={`primary-button library-upload-button ${uploading ? "is-disabled" : ""}`} htmlFor="owned-files-input">

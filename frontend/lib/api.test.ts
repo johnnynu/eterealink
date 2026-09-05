@@ -10,6 +10,7 @@ import {
 	listFolderContents,
   revokePersistentFileShare,
   resolveShare,
+	streamFolderEvents,
   uploadResumable,
 } from "./api";
 
@@ -116,6 +117,34 @@ describe("API client", () => {
 			"/api/v1/folders/folder-1?q=report&sort=name&filter=shared&limit=10&cursor=next-page",
 			{ headers: { Authorization: "Bearer firebase-token" }, cache: "no-store" },
 		);
+	});
+
+	it("streams authenticated folder invalidations across response chunks", async () => {
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(encoder.encode(": connected\n\nevent: folder."));
+				controller.enqueue(encoder.encode("changed\ndata: {\"folderId\":\"folder-1\"}\n\n"));
+				controller.close();
+			},
+		});
+		const fetchMock = vi.fn().mockResolvedValue(new Response(stream, {
+			status: 200, headers: { "Content-Type": "text/event-stream" },
+		}));
+		vi.stubGlobal("fetch", fetchMock);
+		const opened = vi.fn();
+		const changed = vi.fn();
+		const controller = new AbortController();
+
+		await streamFolderEvents("firebase-token", "folder-1", controller.signal, opened, changed);
+
+		expect(fetchMock).toHaveBeenCalledWith("/api/v1/folders/folder-1/events", {
+			headers: { Authorization: "Bearer firebase-token", Accept: "text/event-stream" },
+			cache: "no-store",
+			signal: controller.signal,
+		});
+		expect(opened).toHaveBeenCalledOnce();
+		expect(changed).toHaveBeenCalledWith({ folderId: "folder-1" });
 	});
 
   it("creates one transfer request containing every selected file", async () => {

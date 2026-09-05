@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 	"github.com/eterealink/eterealink/backend/internal/config"
 	"github.com/eterealink/eterealink/backend/internal/database"
 	"github.com/eterealink/eterealink/backend/internal/identity"
+	"github.com/eterealink/eterealink/backend/internal/realtime"
 	"github.com/eterealink/eterealink/backend/internal/service"
 	"github.com/eterealink/eterealink/backend/internal/storage"
 )
@@ -66,6 +68,8 @@ func run(logger *slog.Logger) error {
 	)
 	workerContext, stopWorker := context.WithCancel(context.Background())
 	defer stopWorker()
+	folderEvents := realtime.NewFolderBroker()
+	go folderEvents.Run(workerContext, db, logger)
 	if cfg.StorageBackend == "gcs" {
 		archiveWorker := service.NewArchiveWorker(db, storageBackend, time.Now, logger)
 		go archiveWorker.Run(workerContext, 2*time.Second)
@@ -73,7 +77,8 @@ func run(logger *slog.Logger) error {
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewHandler(transfers, bundles, files, users, tokenVerifier, db, logger, folders),
+		Handler:           api.NewHandlerWithRealtime(transfers, bundles, files, users, tokenVerifier, db, logger, folders, folderEvents),
+		BaseContext:        func(net.Listener) context.Context { return workerContext },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -91,6 +96,7 @@ func run(logger *slog.Logger) error {
 
 	select {
 	case <-shutdownContext.Done():
+		stopWorker()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)

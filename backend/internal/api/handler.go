@@ -13,7 +13,14 @@ import (
 
 	"github.com/eterealink/eterealink/backend/internal/domain"
 	"github.com/eterealink/eterealink/backend/internal/identity"
+	"github.com/eterealink/eterealink/backend/internal/realtime"
 	"github.com/eterealink/eterealink/backend/internal/service"
+)
+
+const (
+	folderEventHeartbeat    = 10 * time.Second
+	folderEventStreamLength = 4*time.Minute + 30*time.Second
+	folderEventWriteWindow  = 15 * time.Second
 )
 
 type ReadinessChecker interface {
@@ -21,14 +28,15 @@ type ReadinessChecker interface {
 }
 
 type Handler struct {
-	transfers *service.Transfers
-	bundles   *service.Bundles
-	files     *service.Files
-	folders   *service.Folders
-	users     *service.Users
-	verifier  identity.Verifier
-	readiness ReadinessChecker
-	logger    *slog.Logger
+	transfers    *service.Transfers
+	bundles      *service.Bundles
+	files        *service.Files
+	folders      *service.Folders
+	users        *service.Users
+	verifier     identity.Verifier
+	readiness    ReadinessChecker
+	logger       *slog.Logger
+	folderEvents realtime.FolderEventSubscriber
 }
 
 func NewHandler(
@@ -41,12 +49,41 @@ func NewHandler(
 	logger *slog.Logger,
 	folders ...*service.Folders,
 ) http.Handler {
+	var folderService *service.Folders
+	if len(folders) > 0 {
+		folderService = folders[0]
+	}
+	return newHandler(transfers, bundles, files, users, verifier, readiness, logger, folderService, nil)
+}
+
+func NewHandlerWithRealtime(
+	transfers *service.Transfers,
+	bundles *service.Bundles,
+	files *service.Files,
+	users *service.Users,
+	verifier identity.Verifier,
+	readiness ReadinessChecker,
+	logger *slog.Logger,
+	folders *service.Folders,
+	folderEvents realtime.FolderEventSubscriber,
+) http.Handler {
+	return newHandler(transfers, bundles, files, users, verifier, readiness, logger, folders, folderEvents)
+}
+
+func newHandler(
+	transfers *service.Transfers,
+	bundles *service.Bundles,
+	files *service.Files,
+	users *service.Users,
+	verifier identity.Verifier,
+	readiness ReadinessChecker,
+	logger *slog.Logger,
+	folders *service.Folders,
+	folderEvents realtime.FolderEventSubscriber,
+) http.Handler {
 	handler := &Handler{
 		transfers: transfers, bundles: bundles, files: files, users: users, verifier: verifier,
-		readiness: readiness, logger: logger,
-	}
-	if len(folders) > 0 {
-		handler.folders = folders[0]
+		readiness: readiness, logger: logger, folders: folders, folderEvents: folderEvents,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handler.health)
@@ -63,6 +100,7 @@ func NewHandler(
 	mux.Handle("POST /v1/folders", handler.requireAuthentication(http.HandlerFunc(handler.createFolder)))
 	mux.Handle("GET /v1/folders", handler.requireAuthentication(http.HandlerFunc(handler.listRootFolders)))
 	mux.Handle("GET /v1/folders/{id}", handler.requireAuthentication(http.HandlerFunc(handler.getFolder)))
+	mux.Handle("GET /v1/folders/{id}/events", handler.requireAuthentication(http.HandlerFunc(handler.folderEventStream)))
 	mux.Handle("PATCH /v1/folders/{id}", handler.requireAuthentication(http.HandlerFunc(handler.updateFolder)))
 	mux.Handle("DELETE /v1/folders/{id}", handler.requireAuthentication(http.HandlerFunc(handler.deleteFolder)))
 	mux.Handle("GET /v1/folders/{id}/members", handler.requireAuthentication(http.HandlerFunc(handler.listFolderMembers)))
@@ -377,6 +415,92 @@ func (h *Handler) getFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) folderEventStream(w http.ResponseWriter, r *http.Request) {
+	user, ok := folderRequestUser(w, r)
+	if !ok || !h.folderService(w) {
+		return
+	}
+	if h.folderEvents == nil {
+		writeError(w, http.StatusServiceUnavailable, "realtime_unavailable", "realtime folder updates are not configured")
+		return
+	}
+	folderID := strings.TrimSpace(r.PathValue("id"))
+	if folderID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "folder id is required")
+		return
+	}
+	contents, err := h.folders.Contents(r.Context(), user.ID, folderID, service.ListFolderInput{Limit: 1})
+	if h.writeFolderError(w, err, "subscribe") {
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming_unavailable", "streaming is not supported")
+		return
+	}
+
+	folderIDs := make([]string, 0, len(contents.Breadcrumbs)+1)
+	seen := make(map[string]struct{}, len(contents.Breadcrumbs)+1)
+	for _, folder := range contents.Breadcrumbs {
+		if _, exists := seen[folder.ID]; !exists {
+			seen[folder.ID] = struct{}{}
+			folderIDs = append(folderIDs, folder.ID)
+		}
+	}
+	if _, exists := seen[folderID]; !exists {
+		folderIDs = append(folderIDs, folderID)
+	}
+	events, unsubscribe := h.folderEvents.Subscribe(folderIDs)
+	defer unsubscribe()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("X-Accel-Buffering", "no")
+	controller := http.NewResponseController(w)
+	writeFrame := func(frame string) error {
+		_ = controller.SetWriteDeadline(time.Now().Add(folderEventWriteWindow))
+		if _, err := io.WriteString(w, frame); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	if err := writeFrame(": connected\n\n"); err != nil {
+		return
+	}
+
+	heartbeat := time.NewTicker(folderEventHeartbeat)
+	defer heartbeat.Stop()
+	rotate := time.NewTimer(folderEventStreamLength)
+	defer rotate.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-rotate.C:
+			return
+		case <-heartbeat.C:
+			if err := writeFrame(": keepalive\n\n"); err != nil {
+				return
+			}
+		case event, open := <-events:
+			if !open {
+				return
+			}
+			payload, err := json.Marshal(event)
+			if err != nil {
+				return
+			}
+			if err := writeFrame("event: folder.changed\ndata: " + string(payload) + "\n\n"); err != nil {
+				return
+			}
+			// Reconnecting after an invalidation reauthorizes the browser and
+			// rebuilds its ancestor subscriptions after folder moves.
+			return
+		}
+	}
 }
 
 func folderListInput(r *http.Request) service.ListFolderInput {
