@@ -37,10 +37,8 @@ a { color: inherit; }
 .site-header, footer { width: min(1180px, calc(100% - 48px)); margin-inline: auto; }
 .site-header { height: 92px; display: flex; align-items: center; justify-content: space-between; position: relative; z-index: 10; border-bottom: 1px solid var(--line); }
 .brand { display: inline-flex; align-items: center; gap: 11px; text-decoration: none; font-family: var(--font-display), sans-serif; font-size: 20px; font-weight: 750; letter-spacing: -0.04em; }
-.brand-mark { width: 28px; height: 28px; position: relative; display: inline-block; transform: rotate(-8deg); }
-.brand-mark span { position: absolute; width: 18px; height: 11px; border: 2px solid var(--green); border-radius: 999px; transform: rotate(-38deg); }
-.brand-mark span:first-child { left: 0; top: 3px; }
-.brand-mark span:last-child { right: 0; bottom: 3px; }
+.brand-mark { width: 31px; height: 31px; display: inline-grid; place-items: center; color: var(--green); }
+.brand-mark svg { display: block; width: 100%; height: 100%; }
 .site-header nav { display: flex; align-items: center; gap: 28px; font-size: 14px; }
 .nav-note { color: var(--muted); }
 .nav-link { text-decoration: none; font-weight: 700; border-bottom: 1px solid var(--ink); padding-bottom: 3px; }
@@ -51,6 +49,12 @@ a { color: inherit; }
 .auth-button, .sign-out-button { cursor: pointer; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 9px 13px; font-size: 13px; font-weight: 750; }
 .auth-button:hover, .sign-out-button:hover { background: var(--cream); }
 .auth-button:disabled, .sign-out-button:disabled { cursor: wait; opacity: .55; }
+.google-auth-button { height: 40px; padding: 0; overflow: visible; border: 0; line-height: 0; background: transparent; }
+.google-auth-button:hover { background: transparent; filter: drop-shadow(0 3px 7px rgba(23, 33, 29, .12)); }
+.google-auth-button:focus-visible { outline: 3px solid var(--apricot); outline-offset: 4px; }
+.google-sign-in-full { display: block; width: 180px; height: 40px; }
+.google-sign-in-compact { display: none; width: 40px; height: 40px; }
+.google-auth-busy { min-width: 180px; height: 40px; display: grid; place-items: center; padding: 0 16px; border: 1px solid #747775; border-radius: 999px; color: #1f1f1f; background: #fff; font-size: 14px; line-height: 1; }
 .auth-loading { color: var(--muted); font-size: 12px; }
 .user-avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; color: var(--green-dark); background: var(--mint); font-weight: 800; }
 .user-summary { display: flex; flex-direction: column; max-width: 150px; line-height: 1.25; }
@@ -84,6 +88,10 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 .hero h1 { font-family: var(--font-display), sans-serif; margin: 0; font-size: clamp(54px, 6vw, 82px); line-height: .98; letter-spacing: -.07em; font-weight: 650; }
 .hero h1 em { color: var(--green); font-style: normal; }
 .hero-description { max-width: 520px; margin: 30px 0 40px; color: var(--muted); font-size: 19px; line-height: 1.65; }
+.home-page .hero-description { margin-bottom: 18px; }
+.account-discovery-link { display: inline-block; margin-bottom: 30px; color: var(--green-dark); font-size: 14px; line-height: 1.6; text-underline-offset: 4px; }
+.account-discovery-link span { display: inline-block; margin-left: 4px; }
+.account-discovery-link:hover { color: var(--ink); }
 .promise-row { display: grid; grid-template-columns: repeat(3, 1fr); max-width: 520px; padding-top: 22px; border-top: 1px solid var(--line); }
 .promise-row div { display: flex; flex-direction: column; gap: 5px; padding-left: 19px; border-left: 1px solid var(--line); }
 .promise-row div:first-child { border: 0; padding-left: 0; }
@@ -155,6 +163,23 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 .copy-button { flex: none; border-radius: 10px; padding: 0 13px; min-height: 39px; background: var(--ink); color: white; font-size: 11px; }
 .copy-button svg { width: 15px; margin-right: 6px; }
 .expiry-note { display: flex; align-items: center; gap: 9px; color: var(--muted); margin: 17px 0 13px; font-size: 11px; }
+
+.account-benefits { position: relative; width: min(1120px, calc(100% - 48px)); margin: 0 auto 80px; display: grid; grid-template-columns: .9fr 1.3fr; border: 1px solid var(--line); border-radius: 28px; background: var(--cream); overflow: hidden; scroll-margin-top: 24px; }
+.account-benefits-intro { padding: 42px 36px; background: var(--green-dark); color: var(--cream); }
+.account-benefits-intro .eyebrow { color: var(--mint); line-height: 1.5; }
+.account-benefits h2 { margin: 0; font: 650 clamp(30px, 3.4vw, 42px)/1.12 var(--font-display); letter-spacing: -.05em; }
+.account-benefits-intro > p:not(.eyebrow) { margin: 22px 0 28px; color: #d5e5dc; font-size: 16px; line-height: 1.7; }
+.account-benefits-sign-in .auth-control { display: flex; flex-direction: column; align-items: stretch; }
+.account-benefits-sign-in .auth-button { align-self: flex-start; }
+.account-benefits-sign-in .auth-error { position: static; width: auto; box-shadow: none; }
+.account-benefits-sign-in > p { color: #d5e5dc; font-size: 14px; line-height: 1.6; }
+.account-benefits-sign-in > p { margin: 12px 0 0; }
+.account-feature-list { list-style: none; margin: 0; padding: 36px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px; }
+.account-feature-icon { display: grid; place-items: center; width: 42px; height: 42px; margin-bottom: 16px; border-radius: 12px; color: var(--green); background: #e7efe7; }
+.account-feature-icon svg { width: 23px; height: 23px; }
+.account-feature-list h3 { margin: 0 0 10px; font: 750 18px/1.35 var(--font-display); letter-spacing: -.025em; }
+.account-feature-list p { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.65; }
+.account-discovery-link:focus-visible, .account-benefits .auth-button:focus-visible { outline: 3px solid var(--apricot); outline-offset: 5px; }
 
 .how-it-works { width: min(1120px, calc(100% - 48px)); margin: 0 auto 110px; border-top: 1px solid var(--line); padding-top: 58px; display: grid; grid-template-columns: .7fr 1.5fr; gap: 70px; }
 .how-it-works h2 { font-family: var(--font-display), sans-serif; font-size: 36px; letter-spacing: -.05em; margin: 0; }
@@ -401,6 +426,7 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 .invite-card .error-message { margin: 14px 0 0; }
 
 @media (max-width: 900px) {
+  .account-benefits { grid-template-columns: 1fr; }
   .hero { grid-template-columns: 1fr; max-width: 640px; gap: 55px; }
   .hero-copy { text-align: center; margin-inline: auto; }
   .hero-kicker { justify-content: center; }
@@ -425,6 +451,10 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 }
 
 @media (max-width: 620px) {
+  .account-benefits { width: calc(100% - 30px); margin-bottom: 56px; border-radius: 23px; }
+  .account-benefits-intro { padding: 30px 23px; }
+  .account-feature-list { grid-template-columns: 1fr; gap: 26px; padding: 28px 23px; }
+  .account-feature-list li + li { border-top: 1px solid var(--line); padding-top: 26px; }
   .site-header, footer, .hero, .how-it-works, .share-page, .invite-page, .app-page { width: min(100% - 30px, 100%); }
   .site-header { height: 76px; }
   .site-header nav { gap: 10px; }
@@ -432,6 +462,10 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
   .workspace-header nav { gap: 8px; }
   .workspace-nav-link { font-size: 13px; }
   .auth-button { padding: 8px 11px; }
+  .site-header .google-auth-button { width: 40px; padding: 0; }
+  .site-header .google-sign-in-full { display: none; }
+  .site-header .google-sign-in-compact { display: block; }
+  .site-header .google-auth-busy { min-width: 40px; width: 40px; padding: 0; font-size: 0; }
   .sign-out-button { padding-inline: 5px; }
   .hero { padding: 58px 0 72px; min-height: auto; }
   .hero h1 { font-size: clamp(47px, 14.5vw, 68px); }

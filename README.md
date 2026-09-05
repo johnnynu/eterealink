@@ -10,7 +10,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 5.1—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, and folder collaboration—are complete.
+Phases 1 through 5.5—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, and landing-page account feature introduction—are complete.
 
 Implemented:
 
@@ -225,6 +225,7 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 4.5. Persistent files ✅ | Owner-scoped uploads, private file library, downloads, and deletion |
 | 5. Folders ✅ | OWNER/VIEWER folders, bulk workflows, upload queue, quota, sharing, and cursor-based library queries |
 | 5.1. Collaboration ✅ | Scalable access management, personalized expiring invites, Contributor uploads, uploader attribution, and uploader-owned file controls |
+| 5.5. Landing page ✅ | Introduce account benefits alongside anonymous sharing, with a Google sign-in call to action and responsive feature section |
 | 6. Previews | Browser previews with a safe generic fallback |
 | 6.5. Realtime collaboration | Authenticated SSE folder invalidation, PostgreSQL notifications, and reconnect-safe refreshes |
 | 7-10. Cloud platform | Containers, Cloud Run, private networking, and Terraform |

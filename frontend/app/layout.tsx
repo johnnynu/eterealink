@@ -5,7 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: { default: "Eterealink — Share a file simply", template: "%s · Eterealink" },
-  description: "Send a file with a private link that expires automatically after 24 hours.",
+  description: "Share files without an account using 24-hour links. Sign in for a private file library, folders, collaboration, and control over your share links.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

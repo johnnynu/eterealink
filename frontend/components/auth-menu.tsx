@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useAuth } from "@/components/auth-context";
 
 export function AuthMenu() {
@@ -13,8 +14,16 @@ export function AuthMenu() {
   if (!user) {
     return (
       <span className="auth-control">
-        <button className="auth-button" type="button" onClick={signIn} disabled={busy}>
-          {busy ? "Signing in…" : "Sign in with Google"}
+        <button className="auth-button google-auth-button" type="button" onClick={signIn} disabled={busy} aria-label={busy ? "Signing in with Google" : undefined}>
+          {busy ? (
+            <span className="google-auth-busy">Signing in…</span>
+          ) : (
+            <>
+              <Image className="google-sign-in-full" src="/google-sign-in-pill.svg" alt="" width={180} height={40} priority />
+              <Image className="google-sign-in-compact" src="/google-sign-in-icon.svg" alt="" width={40} height={40} priority />
+              <span className="visually-hidden">Sign in with Google</span>
+            </>
+          )}
         </button>
         {error && <span className="auth-error" role="alert">{error}</span>}
       </span>
