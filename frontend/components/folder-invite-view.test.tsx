@@ -81,7 +81,7 @@ describe("FolderInviteView", () => {
     });
     await renderInvite();
     expect(api.acceptFolderInvite).toHaveBeenCalledWith("join-code", "verified-token");
-    expect(router.replace).toHaveBeenCalledWith("/app?openFolder=folder-1&scope=shared");
+		expect(router.replace).toHaveBeenCalledWith("/app?folder=folder-1&scope=shared");
   });
 
   it("shows a specific state for an expired invitation", async () => {

@@ -131,6 +131,15 @@ export type FileDownloadResult = {
     url: string;
     expiresAt: string;
   };
+	preview?: FilePreviewRecord;
+};
+
+export type FilePreviewKind = "image" | "pdf" | "video" | "audio" | "text";
+
+export type FilePreviewRecord = {
+	kind: FilePreviewKind;
+	url: string;
+	expiresAt: string;
 };
 
 export type ResolveShareResult = {
@@ -140,6 +149,7 @@ export type ResolveShareResult = {
     url: string;
     expiresAt: string;
   };
+	preview?: FilePreviewRecord;
 };
 
 export type AnonymousTransfer = {
@@ -165,6 +175,7 @@ export type ResolveTransferResult = {
   files: Array<{
     file: FileRecord;
     downloadTarget: { url: string; expiresAt: string };
+	preview?: FilePreviewRecord;
   }>;
   archive: {
     status: AnonymousTransfer["archiveStatus"];

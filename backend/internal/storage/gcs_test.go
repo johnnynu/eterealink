@@ -62,6 +62,19 @@ func TestGCSBackendSignsV4Targets(t *testing.T) {
 	if disposition := parsedDownload.Query().Get("response-content-disposition"); disposition != `attachment; filename="project notes.txt"` {
 		t.Fatalf("content disposition = %q", disposition)
 	}
+
+	preview, err := backend.SignPreview(context.Background(), "anonymous/file-id", "project notes.txt", "text/plain", expiresAt)
+	if err != nil {
+		t.Fatalf("SignPreview() error = %v", err)
+	}
+	assertV4URL(t, preview.URL, "signer@example.iam.gserviceaccount.com")
+	parsedPreview, _ := url.Parse(preview.URL)
+	if disposition := parsedPreview.Query().Get("response-content-disposition"); disposition != `inline; filename="project notes.txt"` {
+		t.Fatalf("preview content disposition = %q", disposition)
+	}
+	if contentType := parsedPreview.Query().Get("response-content-type"); contentType != "text/plain" {
+		t.Fatalf("preview content type = %q", contentType)
+	}
 }
 
 func assertV4URL(t *testing.T, value, account string) {

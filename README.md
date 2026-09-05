@@ -10,7 +10,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 5.5—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, and landing-page account feature introduction—are complete.
+Phases 1 through 6—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, and safe browser previews—are complete.
 
 Implemented:
 
@@ -40,7 +40,7 @@ Implemented:
 - A 5 GiB per-file limit for authenticated persistent uploads while anonymous transfers remain capped at 1 GiB combined
 - Persistent-library storage totals, drag-and-drop, filename search, shared-file filtering, sorting, and bounded pagination
 - Signed-in `/app` workspace with a private file library and a separate 24-hour transfer flow
-- Nested virtual folders with breadcrumbs, folder-scoped uploads, renaming, and empty-folder deletion
+- Nested virtual folders with URL-backed breadcrumbs that survive refresh and browser navigation, folder-scoped uploads, renaming, and empty-folder deletion
 - Inherited Viewer and Contributor folder roles with a dedicated “Shared with me” workspace
 - Descendant access panels that show inherited members and link back to the folder where access was granted
 - Expiring, revocable folder invite links with a first-time-user sign-in handoff, plus direct email-based access
@@ -49,8 +49,18 @@ Implemented:
 - Multi-select file moves and deletion, including moves back to the library root
 - Persistent per-file upload queue with progress, cancel, retry, and independent failure handling
 - Atomic 25 GiB account storage quota enforcement, configurable independently from the 5 GiB per-file limit
+- Short-lived inline preview targets for supported images, PDFs, video, audio, and text
+- Escaped text rendering, cross-origin PDF embedding, a server-side media allowlist, and generic fallback for unsupported files
+- Preview selection for multi-file transfers and an authenticated preview dialog for private or shared-folder files
+- Original-quality video playback with Eterealink controls for seeking, ten-second skips, volume, playback speed, picture-in-picture, fullscreen, source-resolution display, buffering and codec feedback, auto-hiding controls, and remembered preferences
 
 The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
+
+### Post-MVP media roadmap
+
+- WebVTT captions and track selection after uploads can associate subtitle files with a video.
+- Timeline thumbnail previews after an asynchronous worker can extract and store seek-preview sprites.
+- Adaptive streaming and selectable quality after a transcoding pipeline can create multiple renditions and HLS/DASH manifests.
 
 ## Product goals
 
@@ -139,7 +149,7 @@ An anonymous transfer follows this path:
 | `POST` | `/v1/files` | Create owner-linked persistent file metadata and an upload target |
 | `GET` | `/v1/files` | List the authenticated user's ready files and aggregate storage usage |
 | `POST` | `/v1/files/{id}/complete` | Verify and complete an owned persistent upload |
-| `GET` | `/v1/files/{id}/download` | Create a short-lived download target for an owned file or a file inherited through folder membership |
+| `GET` | `/v1/files/{id}/download` | Create short-lived download and optional safe preview targets for an owned file or a file inherited through folder membership |
 | `POST` | `/v1/files/{id}/shares` | Create an expiring or non-expiring public link for an owned file |
 | `DELETE` | `/v1/files/{id}/shares/{shareID}` | Revoke an active link for an owned file |
 | `DELETE` | `/v1/files/{id}` | Delete an owned persistent file and its storage object |
@@ -162,7 +172,7 @@ An anonymous transfer follows this path:
 | `POST` | `/v1/uploads/{id}/complete` | Mark a successful direct upload ready |
 | `POST` | `/v1/transfers` | Create one anonymous multi-file transfer and resumable targets |
 | `POST` | `/v1/transfers/{transferID}/files/{fileID}/complete` | Verify and complete one transfer file |
-| `GET` | `/v1/shares/{code}` | Resolve a usable single-file or multi-file share and short-lived download targets |
+| `GET` | `/v1/shares/{code}` | Resolve a usable single-file or multi-file share with short-lived download targets and optional safe previews |
 
 ## Local development
 
@@ -226,12 +236,12 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 5. Folders ✅ | OWNER/VIEWER folders, bulk workflows, upload queue, quota, sharing, and cursor-based library queries |
 | 5.1. Collaboration ✅ | Scalable access management, personalized expiring invites, Contributor uploads, uploader attribution, and uploader-owned file controls |
 | 5.5. Landing page ✅ | Introduce account benefits alongside anonymous sharing, with a Google sign-in call to action and responsive feature section |
-| 6. Previews | Browser previews with a safe generic fallback |
+| 6. Previews ✅ | Browser previews with a safe generic fallback |
 | 6.5. Realtime collaboration | Authenticated SSE folder invalidation, PostgreSQL notifications, and reconnect-safe refreshes |
 | 7-10. Cloud platform | Containers, Cloud Run, private networking, and Terraform |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |
 
-The product MVP is reached after the preview phase. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.
+The product MVP is complete. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.
 
 ## Security and cost posture
 

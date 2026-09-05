@@ -51,7 +51,7 @@ export function FolderInviteView({ code }: { code: string }) {
       const token = await getIDToken();
       setState("accepting");
       const access = await acceptFolderInvite(code, token);
-      router.replace(`/app?openFolder=${encodeURIComponent(access.folder.id)}&scope=shared`);
+			router.replace(`/app?folder=${encodeURIComponent(access.folder.id)}&scope=shared`);
     } catch (inviteError) {
       if (inviteError instanceof APIError && inviteError.code === "expired") setState("expired");
       else if (inviteError instanceof APIError && inviteError.code === "revoked") setState("revoked");

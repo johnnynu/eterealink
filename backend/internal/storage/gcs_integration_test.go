@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -108,5 +109,32 @@ func TestGCSBackendIntegration(t *testing.T) {
 	}
 	if !bytes.Equal(downloadBody, payload) {
 		t.Fatalf("downloaded payload = %q", downloadBody)
+	}
+
+	preview, err := backend.SignPreview(ctx, storageKey, "integration test.txt", "text/plain", time.Now().Add(5*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, preview.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewResponse, err := http.DefaultClient.Do(previewRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewBody, readErr := io.ReadAll(previewResponse.Body)
+	_ = previewResponse.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if previewResponse.StatusCode != http.StatusOK || !bytes.Equal(previewBody, payload) {
+		t.Fatalf("preview status = %s, body = %q", previewResponse.Status, previewBody)
+	}
+	if disposition := previewResponse.Header.Get("Content-Disposition"); !strings.HasPrefix(disposition, "inline") {
+		t.Fatalf("preview content disposition = %q", disposition)
+	}
+	if contentType := previewResponse.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/plain") {
+		t.Fatalf("preview content type = %q", contentType)
 	}
 }

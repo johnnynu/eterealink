@@ -7,6 +7,7 @@ import { formatBytes, formatExpiry, timeRemaining } from "@/lib/format";
 import type { ShareResult } from "@/lib/types";
 import { isTransferResult } from "@/lib/types";
 import { DownloadIcon, FileIcon } from "@/components/icons";
+import { FilePreview } from "@/components/file-preview";
 
 type LoadState = "loading" | "ready" | "expired" | "missing" | "unavailable";
 
@@ -18,14 +19,24 @@ export function ShareView({ code }: { code: string }) {
   const [state, setState] = useState<LoadState>("loading");
   const [transfer, setTransfer] = useState<ShareResult | null>(null);
   const [remaining, setRemaining] = useState("");
+	const [activePreviewID, setActivePreviewID] = useState("");
+
+	const acceptResult = useCallback((result: ShareResult) => {
+		setTransfer(result);
+		setRemaining(timeRemaining(expiresAt(result)));
+		if (isTransferResult(result)) {
+			setActivePreviewID((current) => result.files.some((item) => item.file.id === current && item.preview)
+				? current
+				: result.files.find((item) => item.preview)?.file.id ?? "");
+		}
+		setState("ready");
+	}, []);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setState("loading");
     try {
       const result = await resolveShare(code);
-      setTransfer(result);
-      setRemaining(timeRemaining(expiresAt(result)));
-      setState("ready");
+		acceptResult(result);
     } catch (error) {
       if (silent) return;
       if (error instanceof APIError && (error.code === "expired" || error.code === "revoked" || error.status === 410)) {
@@ -36,16 +47,14 @@ export function ShareView({ code }: { code: string }) {
         setState("unavailable");
       }
     }
-  }, [code]);
+	}, [acceptResult, code]);
 
   useEffect(() => {
     let active = true;
     resolveShare(code)
       .then((result) => {
         if (!active) return;
-        setTransfer(result);
-        setRemaining(timeRemaining(expiresAt(result)));
-        setState("ready");
+		acceptResult(result);
       })
       .catch((error: unknown) => {
         if (!active) return;
@@ -58,7 +67,7 @@ export function ShareView({ code }: { code: string }) {
         }
       });
     return () => { active = false; };
-  }, [code]);
+	}, [acceptResult, code]);
 
   useEffect(() => {
     if (state !== "ready" || !transfer || !isTransferResult(transfer)) return;
@@ -111,6 +120,7 @@ export function ShareView({ code }: { code: string }) {
     const total = transfer.files.reduce((sum, item) => sum + item.file.sizeBytes, 0);
     const archiveReady = transfer.archive.status === "READY" && transfer.archive.downloadTarget;
     const archiveFailed = transfer.archive.status === "FAILED";
+		const activePreview = transfer.files.find((item) => item.file.id === activePreviewID);
     return (
       <section className="share-card ready-share bundle-share">
         <div className="share-file-icon"><FileIcon /></div>
@@ -133,16 +143,18 @@ export function ShareView({ code }: { code: string }) {
         )}
 
         <div className="bundle-file-list" aria-label="Files in this transfer">
-          {transfer.files.map(({ file, downloadTarget }) => (
+			{transfer.files.map(({ file, downloadTarget, preview }) => (
             <div className="bundle-file" key={file.id}>
               <span className="file-details">
                 <strong title={file.originalName}>{file.originalName}</strong>
                 <span>{formatBytes(file.sizeBytes)}</span>
               </span>
-              <a href={downloadTarget.url} aria-label={`Download ${file.originalName}`}><DownloadIcon /></a>
+				{preview && <button type="button" className={activePreviewID === file.id ? "is-active" : ""} onClick={() => setActivePreviewID(file.id)}>Preview</button>}
+				<a href={downloadTarget.url} aria-label={`Download ${file.originalName}`}><DownloadIcon /></a>
             </div>
           ))}
         </div>
+		{activePreview && <FilePreview key={activePreview.file.id} name={activePreview.file.originalName} preview={activePreview.preview} />}
 
         {archiveFailed && <p className="safety-copy">The ZIP could not be prepared, but each file can still be downloaded separately.</p>}
         <div className="share-expiry">
@@ -154,7 +166,7 @@ export function ShareView({ code }: { code: string }) {
   }
 
   return (
-    <section className="share-card ready-share">
+	<section className={`share-card ready-share${transfer.preview ? ` preview-share preview-share-${transfer.preview.kind}` : ""}`}>
       <div className="share-file-icon"><FileIcon /></div>
       <p className="eyebrow">A file was shared with you</p>
       <h1>{transfer.file.originalName}</h1>
@@ -163,6 +175,7 @@ export function ShareView({ code }: { code: string }) {
         <span aria-hidden="true">•</span>
         <span>{transfer.file.mimeType || "File"}</span>
       </div>
+		<FilePreview name={transfer.file.originalName} preview={transfer.preview} />
       <a className="primary-button download-button" href={transfer.downloadTarget.url}>
         <DownloadIcon /> Download file
       </a>

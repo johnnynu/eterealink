@@ -156,6 +156,14 @@ func TestPersistentUploadUsesAuthenticatedOwner(t *testing.T) {
 		t.Fatalf("list response is missing storage summary: %s", listResponse.Body.String())
 	}
 
+	downloadRequest := httptest.NewRequest(http.MethodGet, "/v1/files/"+filesStore.file.ID+"/download", nil)
+	downloadRequest.Header.Set("Authorization", "Bearer verified-token")
+	downloadResponse := httptest.NewRecorder()
+	handler.ServeHTTP(downloadResponse, downloadRequest)
+	if downloadResponse.Code != http.StatusOK || !strings.Contains(downloadResponse.Body.String(), `"preview":{"kind":"text","url":"https://preview.invalid/`) {
+		t.Fatalf("download response is missing text preview: %s", downloadResponse.Body.String())
+	}
+
 	shareRequest := httptest.NewRequest(http.MethodPost, "/v1/files/"+filesStore.file.ID+"/shares", strings.NewReader(`{"expiresIn":"30d"}`))
 	shareRequest.Header.Set("Authorization", "Bearer verified-token")
 	shareResponse := httptest.NewRecorder()
@@ -299,6 +307,10 @@ func (handlerFileBackend) SignResumableUpload(_ context.Context, key, _ string, 
 
 func (handlerFileBackend) SignDownload(_ context.Context, key, _ string, expiresAt time.Time) (storage.DownloadTarget, error) {
 	return storage.DownloadTarget{URL: "https://download.invalid/" + key, ExpiresAt: expiresAt}, nil
+}
+
+func (handlerFileBackend) SignPreview(_ context.Context, key, _, _ string, expiresAt time.Time) (storage.PreviewTarget, error) {
+	return storage.PreviewTarget{URL: "https://preview.invalid/" + key, ExpiresAt: expiresAt}, nil
 }
 
 func (handlerFileBackend) StatObject(context.Context, string) (storage.ObjectAttributes, error) {

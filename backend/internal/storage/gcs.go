@@ -111,6 +111,23 @@ func (b *GCSBackend) SignDownload(ctx context.Context, storageKey, originalName 
 	return DownloadTarget{URL: signedURL, ExpiresAt: expiresAt}, nil
 }
 
+func (b *GCSBackend) SignPreview(ctx context.Context, storageKey, originalName, mimeType string, expiresAt time.Time) (PreviewTarget, error) {
+	disposition := mime.FormatMediaType("inline", map[string]string{"filename": originalName})
+	signedURL, err := b.signedURL(ctx, storageKey, &cloudstorage.SignedURLOptions{
+		Scheme:  cloudstorage.SigningSchemeV4,
+		Method:  http.MethodGet,
+		Expires: expiresAt,
+		QueryParameters: url.Values{
+			"response-content-disposition": []string{disposition},
+			"response-content-type":        []string{mimeType},
+		},
+	})
+	if err != nil {
+		return PreviewTarget{}, err
+	}
+	return PreviewTarget{URL: signedURL, ExpiresAt: expiresAt}, nil
+}
+
 func (b *GCSBackend) StatObject(ctx context.Context, storageKey string) (ObjectAttributes, error) {
 	attributes, err := b.client.Bucket(b.bucketName).Object(storageKey).Attrs(ctx)
 	if errors.Is(err, cloudstorage.ErrObjectNotExist) {

@@ -28,6 +28,11 @@ type DownloadTarget struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
+type PreviewTarget struct {
+	URL       string    `json:"url"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
 type ObjectAttributes struct {
 	SizeBytes int64
 	MIMEType  string
@@ -37,6 +42,7 @@ type Signer interface {
 	SignUpload(ctx context.Context, storageKey, mimeType string, expiresAt time.Time) (UploadTarget, error)
 	SignResumableUpload(ctx context.Context, storageKey, mimeType string, expiresAt time.Time) (UploadTarget, error)
 	SignDownload(ctx context.Context, storageKey, originalName string, expiresAt time.Time) (DownloadTarget, error)
+	SignPreview(ctx context.Context, storageKey, originalName, mimeType string, expiresAt time.Time) (PreviewTarget, error)
 }
 
 type TransferBackend interface {
@@ -78,6 +84,10 @@ func (s DevelopmentSigner) SignResumableUpload(_ context.Context, storageKey, mi
 
 func (s DevelopmentSigner) SignDownload(_ context.Context, storageKey, _ string, expiresAt time.Time) (DownloadTarget, error) {
 	return DownloadTarget{URL: join(s.BaseURL, "_development/storage/download", storageKey), ExpiresAt: expiresAt}, nil
+}
+
+func (s DevelopmentSigner) SignPreview(_ context.Context, storageKey, _, _ string, expiresAt time.Time) (PreviewTarget, error) {
+	return PreviewTarget{URL: join(s.BaseURL, "_development/storage/preview", storageKey), ExpiresAt: expiresAt}, nil
 }
 
 func (DevelopmentSigner) StatObject(_ context.Context, storageKey string) (ObjectAttributes, error) {

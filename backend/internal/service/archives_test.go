@@ -104,6 +104,10 @@ func (*archiveMemoryBackend) SignDownload(_ context.Context, _ string, _ string,
 	return storage.DownloadTarget{ExpiresAt: expiresAt}, nil
 }
 
+func (*archiveMemoryBackend) SignPreview(_ context.Context, _ string, _ string, _ string, expiresAt time.Time) (storage.PreviewTarget, error) {
+	return storage.PreviewTarget{ExpiresAt: expiresAt}, nil
+}
+
 func (b *archiveMemoryBackend) StatObject(_ context.Context, key string) (storage.ObjectAttributes, error) {
 	contents, ok := b.objects[key]
 	if !ok {

@@ -53,6 +53,7 @@ type CreateFileUploadResult struct {
 type FileDownloadResult struct {
 	File           domain.File            `json:"file"`
 	DownloadTarget storage.DownloadTarget `json:"downloadTarget"`
+	Preview        *FilePreview           `json:"preview,omitempty"`
 }
 
 type FileLibraryResult struct {
@@ -244,7 +245,11 @@ func (s *Files) Download(ctx context.Context, ownerID, fileID string) (FileDownl
 	if err != nil {
 		return FileDownloadResult{}, fmt.Errorf("sign persistent download: %w", err)
 	}
-	return FileDownloadResult{File: file, DownloadTarget: target}, nil
+	preview, err := signFilePreview(ctx, s.storage, file, target.ExpiresAt)
+	if err != nil {
+		return FileDownloadResult{}, err
+	}
+	return FileDownloadResult{File: file, DownloadTarget: target, Preview: preview}, nil
 }
 
 func (s *Files) Delete(ctx context.Context, ownerID, fileID string) error {

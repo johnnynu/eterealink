@@ -47,6 +47,7 @@ type CreateAnonymousTransferResult struct {
 type SharedTransferFile struct {
 	File           domain.File            `json:"file"`
 	DownloadTarget storage.DownloadTarget `json:"downloadTarget"`
+	Preview        *FilePreview           `json:"preview,omitempty"`
 }
 
 type SharedTransferArchive struct {
@@ -200,7 +201,11 @@ func (s *Bundles) ResolveShare(ctx context.Context, code string) (ResolveTransfe
 		if err != nil {
 			return ResolveTransferResult{}, fmt.Errorf("sign download for %q: %w", file.OriginalName, err)
 		}
-		files = append(files, SharedTransferFile{File: file, DownloadTarget: target})
+		preview, err := signFilePreview(ctx, s.storage, file, expiresAt)
+		if err != nil {
+			return ResolveTransferResult{}, fmt.Errorf("prepare preview for %q: %w", file.OriginalName, err)
+		}
+		files = append(files, SharedTransferFile{File: file, DownloadTarget: target, Preview: preview})
 	}
 
 	archive := SharedTransferArchive{Status: shared.Transfer.ArchiveStatus, SizeBytes: shared.Transfer.ArchiveSizeBytes}

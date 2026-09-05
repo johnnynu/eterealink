@@ -3,6 +3,7 @@
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-context";
 import { CopyIcon, DownloadIcon, FileIcon, FolderIcon, LinkIcon, UploadIcon, UsersIcon } from "@/components/icons";
+import { FilePreview } from "@/components/file-preview";
 import {
   acceptFolderInvite,
   addFolderMember,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/api";
 import { formatBytes, formatExpiry, formatFileType, formatRelativeDate } from "@/lib/format";
 import type {
+	FileDownloadResult,
   FileLibrarySummary,
   FileRecord,
   FolderAccess,
@@ -45,6 +47,13 @@ const FILES_PER_PAGE = 10;
 type FileSort = "newest" | "oldest" | "name" | "size";
 type FileFilter = "all" | "shared";
 type LibraryScope = "owned" | "shared";
+type LocationHistoryMode = "none" | "push" | "replace";
+type OpenLocationOptions = {
+	search?: string;
+	sort?: FileSort;
+	filter?: FileFilter;
+	historyMode?: LocationHistoryMode;
+};
 type UploadQueueItem = {
 	id: string;
 	file: File;
@@ -55,6 +64,28 @@ type UploadQueueItem = {
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof APIError ? error.message : fallback;
+}
+
+function readLibraryLocation() {
+	const parameters = new URLSearchParams(window.location.search);
+	return {
+		folderID: parameters.get("folder") ?? parameters.get("openFolder") ?? undefined,
+		scope: parameters.get("scope") === "shared" ? "shared" as const : "owned" as const,
+	};
+}
+
+function writeLibraryLocation(folderID: string | undefined, scope: LibraryScope, mode: Exclude<LocationHistoryMode, "none">) {
+	const url = new URL(window.location.href);
+	url.searchParams.delete("folderInvite");
+	url.searchParams.delete("openFolder");
+	url.searchParams.delete("scope");
+	if (folderID) url.searchParams.set("folder", folderID);
+	else url.searchParams.delete("folder");
+	if (scope === "shared") url.searchParams.set("scope", "shared");
+	const nextURL = `${url.pathname}${url.search}${url.hash}`;
+	const currentURL = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+	if (nextURL === currentURL) return;
+	window.history[mode === "push" ? "pushState" : "replaceState"](null, "", nextURL);
 }
 
 export function PersistentFileLibrary() {
@@ -68,6 +99,8 @@ export function PersistentFileLibrary() {
   const [deletingID, setDeletingID] = useState("");
   const [confirmDeleteID, setConfirmDeleteID] = useState("");
   const [openShareID, setOpenShareID] = useState("");
+	const [previewingID, setPreviewingID] = useState("");
+	const [openPreview, setOpenPreview] = useState<FileDownloadResult | null>(null);
   const [shareExpiration, setShareExpiration] = useState<PersistentShareExpiration>("7d");
   const [shareBusyID, setShareBusyID] = useState("");
   const [copiedShareID, setCopiedShareID] = useState("");
@@ -101,6 +134,7 @@ export function PersistentFileLibrary() {
 	const activeUpload = useRef<{ id: string; abort: () => void } | null>(null);
 	const uploadSequence = useRef(0);
 	const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const openLocationRef = useRef<((folderID?: string, nextScope?: LibraryScope, cursor?: string, overrides?: OpenLocationOptions, resetCursor?: boolean) => Promise<void>) | null>(null);
 	const canUpload = scope === "owned" || (scope === "shared" && currentFolder?.role === "CONTRIBUTOR");
 
   useEffect(() => {
@@ -109,37 +143,33 @@ export function PersistentFileLibrary() {
       try {
         const token = await getIDToken();
 		let result;
-		let initialScope: LibraryScope = "owned";
+		const requestedLocation = readLibraryLocation();
+		let initialScope: LibraryScope = requestedLocation.scope;
 		let inviteError = "";
+		let canonicalizeLocation = false;
 		const initialParameters = new URLSearchParams(window.location.search);
 		const inviteCode = initialParameters.get("folderInvite");
-		const openFolderID = initialParameters.get("openFolder");
+		const openFolderID = requestedLocation.folderID;
 		if (inviteCode) {
 			try {
 				const access = await acceptFolderInvite(inviteCode, token);
 				result = await listFolderContents(token, access.folder.id, "shared", { sort: "newest", limit: FILES_PER_PAGE });
 				initialScope = "shared";
-				const cleanURL = new URL(window.location.href);
-				cleanURL.searchParams.delete("folderInvite");
-				window.history.replaceState({}, "", `${cleanURL.pathname}${cleanURL.search}${cleanURL.hash}`);
+				canonicalizeLocation = true;
 			} catch (inviteFailure) {
 				inviteError = errorMessage(inviteFailure, "This folder invite could not be accepted.");
 			}
 		}
 		if (!result && openFolderID) {
 			try {
-				const requestedScope: LibraryScope = initialParameters.get("scope") === "shared" ? "shared" : "owned";
-				result = await listFolderContents(token, openFolderID, requestedScope, { sort: "newest", limit: FILES_PER_PAGE });
-				initialScope = requestedScope;
-				const cleanURL = new URL(window.location.href);
-				cleanURL.searchParams.delete("openFolder");
-				cleanURL.searchParams.delete("scope");
-				window.history.replaceState({}, "", `${cleanURL.pathname}${cleanURL.search}${cleanURL.hash}`);
+				result = await listFolderContents(token, openFolderID, requestedLocation.scope, { sort: "newest", limit: FILES_PER_PAGE });
+				initialScope = requestedLocation.scope;
+				canonicalizeLocation = true;
 			} catch (folderFailure) {
-				inviteError = errorMessage(folderFailure, "The shared folder could not be opened.");
+				inviteError = errorMessage(folderFailure, "This folder could not be opened.");
 			}
 		}
-		if (!result) result = await listFolderContents(token, undefined, "owned", { sort: "newest", limit: FILES_PER_PAGE });
+		if (!result) result = await listFolderContents(token, undefined, initialScope, { sort: "newest", limit: FILES_PER_PAGE });
         if (active) {
           setFiles(result.files);
 			setFolders(result.folders);
@@ -149,6 +179,7 @@ export function PersistentFileLibrary() {
 			setScope(initialScope);
 			setNextCursor(result.nextCursor ?? "");
 			setError(inviteError);
+			if (canonicalizeLocation) writeLibraryLocation(result.current?.folder.id, initialScope, "replace");
           setSummary(result.summary ?? {
             fileCount: result.files.length,
             totalBytes: result.files.reduce((total, entry) => total + entry.file.sizeBytes, 0),
@@ -181,7 +212,7 @@ export function PersistentFileLibrary() {
 		folderID?: string,
 		nextScope: LibraryScope = scope,
 		cursor = "",
-		overrides: { search?: string; sort?: FileSort; filter?: FileFilter } = {},
+		overrides: OpenLocationOptions = {},
 		resetCursor = true,
 	) {
 		if (searchTimer.current) {
@@ -212,6 +243,9 @@ export function PersistentFileLibrary() {
 			setFolderInvites([]);
 			setCopiedInviteID("");
 			setMemberPanelOpen(false);
+			if (overrides.historyMode && overrides.historyMode !== "none") {
+				writeLibraryLocation(result.current?.folder.id, nextScope, overrides.historyMode);
+			}
 			if (resetCursor) {
 				setPage(1);
 				setCursorHistory([""]);
@@ -222,6 +256,26 @@ export function PersistentFileLibrary() {
 			setError(errorMessage(loadError, "This folder could not be loaded. Please try again."));
 		}
 	}
+
+	openLocationRef.current = openLocation;
+
+	useEffect(() => {
+		function restoreLocation() {
+			const location = readLibraryLocation();
+			setSearchQuery("");
+			setSort("newest");
+			setFilter("all");
+			resetLibraryView();
+			void openLocationRef.current?.(location.folderID, location.scope, "", {
+				search: "",
+				sort: "newest",
+				filter: "all",
+				historyMode: "none",
+			});
+		}
+		window.addEventListener("popstate", restoreLocation);
+		return () => window.removeEventListener("popstate", restoreLocation);
+	}, []);
 
 	async function renameCurrentFolder(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -246,7 +300,7 @@ export function PersistentFileLibrary() {
 			const token = await getIDToken();
 			const parentID = currentFolder.folder.parentFolderId;
 			await deleteFolder(currentFolder.folder.id, token);
-			await openLocation(parentID, "owned");
+			await openLocation(parentID, "owned", "", { historyMode: "replace" });
 		} catch (folderError) {
 			setError(errorMessage(folderError, "Only an empty folder can be deleted."));
 		} finally {
@@ -494,6 +548,28 @@ export function PersistentFileLibrary() {
     }
   }
 
+	async function previewFile(fileID: string) {
+		setError("");
+		setPreviewingID(fileID);
+		try {
+			const token = await getIDToken();
+			setOpenPreview(await getPersistentFileDownload(fileID, token));
+		} catch (previewError) {
+			setError(errorMessage(previewError, "The preview could not be prepared. Please try again."));
+		} finally {
+			setPreviewingID("");
+		}
+	}
+
+	useEffect(() => {
+		if (!openPreview) return;
+		function closeOnEscape(event: KeyboardEvent) {
+			if (event.key === "Escape") setOpenPreview(null);
+		}
+		window.addEventListener("keydown", closeOnEscape);
+		return () => window.removeEventListener("keydown", closeOnEscape);
+	}, [openPreview]);
+
   async function removeFile(fileID: string) {
     const removedFile = files?.find((entry) => entry.file.id === fileID)?.file;
     setDeletingID(fileID);
@@ -635,19 +711,19 @@ export function PersistentFileLibrary() {
     >
       {dragging && <div className="library-drop-overlay" aria-hidden="true"><UploadIcon /> Drop files to add them</div>}
 		<nav className="library-scope" aria-label="Library location">
-			<button type="button" aria-pressed={scope === "owned"} onClick={() => openLocation(undefined, "owned")}>My files</button>
-			<button type="button" aria-pressed={scope === "shared"} onClick={() => openLocation(undefined, "shared")}>Shared with me</button>
+			<button type="button" aria-pressed={scope === "owned"} onClick={() => openLocation(undefined, "owned", "", { historyMode: "push" })}>My files</button>
+			<button type="button" aria-pressed={scope === "shared"} onClick={() => openLocation(undefined, "shared", "", { historyMode: "push" })}>Shared with me</button>
 		</nav>
 		{scope === "owned" && breadcrumbs.length > 0 && (
 			<nav className="folder-breadcrumbs" aria-label="Folder breadcrumbs">
-				<button type="button" onClick={() => openLocation(undefined, "owned")}>My files</button>
-				{breadcrumbs.map((folder) => <span key={folder.id}>/ <button type="button" onClick={() => openLocation(folder.id, "owned")}>{folder.name}</button></span>)}
+				<button type="button" onClick={() => openLocation(undefined, "owned", "", { historyMode: "push" })}>My files</button>
+				{breadcrumbs.map((folder) => <span key={folder.id}>/ <button type="button" onClick={() => openLocation(folder.id, "owned", "", { historyMode: "push" })}>{folder.name}</button></span>)}
 			</nav>
 		)}
 		{scope === "shared" && currentFolder && (
 			<nav className="folder-breadcrumbs" aria-label="Folder breadcrumbs">
-				<button type="button" onClick={() => openLocation(undefined, "shared")}>Shared with me</button>
-				{breadcrumbs.map((folder) => <span key={folder.id}>/ <button type="button" onClick={() => openLocation(folder.id, "shared")}>{folder.name}</button></span>)}
+				<button type="button" onClick={() => openLocation(undefined, "shared", "", { historyMode: "push" })}>Shared with me</button>
+				{breadcrumbs.map((folder) => <span key={folder.id}>/ <button type="button" onClick={() => openLocation(folder.id, "shared", "", { historyMode: "push" })}>{folder.name}</button></span>)}
 			</nav>
 		)}
       <div className="panel-heading">
@@ -765,7 +841,7 @@ export function PersistentFileLibrary() {
 								<div className="folder-member-controls">
 									<em>{member.role === "CONTRIBUTOR" ? "Contributor" : "Viewer"}</em>
 									{member.inherited && member.sourceFolderId ? (
-										<button type="button" className="manage-inherited-access" aria-label={`Manage ${member.user.displayName || member.user.email}'s access in ${member.sourceFolderName || "parent folder"}`} onClick={() => openLocation(member.sourceFolderId, "owned")}>Manage source</button>
+										<button type="button" className="manage-inherited-access" aria-label={`Manage ${member.user.displayName || member.user.email}'s access in ${member.sourceFolderName || "parent folder"}`} onClick={() => openLocation(member.sourceFolderId, "owned", "", { historyMode: "push" })}>Manage source</button>
 									) : (
 										<button type="button" disabled={sharingFolder} onClick={() => revokeMember(member.user.id)}>Remove</button>
 									)}
@@ -791,7 +867,7 @@ export function PersistentFileLibrary() {
 		{folders.length > 0 && (
 			<div className="folder-grid" aria-label="Folders">
 				{folders.map((access) => (
-					<button type="button" className="folder-card" key={access.folder.id} onClick={() => openLocation(access.folder.id, scope)}>
+					<button type="button" className="folder-card" key={access.folder.id} onClick={() => openLocation(access.folder.id, scope, "", { historyMode: "push" })}>
 						<span><FolderIcon /></span><strong>{access.folder.name}</strong>
 						<small>{access.role === "OWNER" ? "Folder" : `${access.role === "CONTRIBUTOR" ? "Contributor" : "Viewer"} · ${access.owner.displayName || access.owner.email}`}</small>
 					</button>
@@ -922,6 +998,9 @@ export function PersistentFileLibrary() {
                   </>
 				) : (
                   <>
+					<button type="button" className="row-action preview" disabled={previewingID === file.id} onClick={() => previewFile(file.id)}>
+					  {previewingID === file.id ? "Opening…" : "Preview"}
+					</button>
                     <button type="button" className="row-action download" onClick={() => downloadFile(file.id)}>
                       <DownloadIcon /> Download
                     </button>
@@ -1012,6 +1091,23 @@ export function PersistentFileLibrary() {
           )}
         </div>
       )}
+	  {openPreview && (
+		<div className="preview-dialog-backdrop" role="presentation" onMouseDown={(event) => {
+			if (event.target === event.currentTarget) setOpenPreview(null);
+		}}>
+			<section className="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview-dialog-title">
+				<header>
+					<div>
+						<p className="eyebrow">File preview</p>
+						<h2 id="preview-dialog-title">{openPreview.file.originalName}</h2>
+					</div>
+					<button type="button" aria-label="Close preview" onClick={() => setOpenPreview(null)}>×</button>
+				</header>
+				<FilePreview key={openPreview.file.id} name={openPreview.file.originalName} preview={openPreview.preview} />
+				<a className="primary-button download-button" href={openPreview.downloadTarget.url}><DownloadIcon /> Download file</a>
+			</section>
+		</div>
+	  )}
     </div>
   );
 }

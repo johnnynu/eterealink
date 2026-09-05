@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PersistentFileLibrary } from "./persistent-file-library";
 import type { FileRecord } from "@/lib/types";
 
@@ -59,11 +59,16 @@ function library(files: Array<{ file: FileRecord; uploaderName?: string; share?:
   };
 }
 
+beforeEach(() => {
+	window.history.replaceState(null, "", "/app");
+});
+
 afterEach(() => {
   for (const view of mounted.splice(0)) {
     act(() => view.unmount());
     view.container.remove();
   }
+	window.history.replaceState(null, "", "/");
   vi.clearAllMocks();
 });
 
@@ -101,6 +106,23 @@ describe("PersistentFileLibrary", () => {
     expect(api.deletePersistentFile).toHaveBeenCalledWith("file-1", "verified-token");
     expect(container.textContent).not.toContain("project-notes.txt");
   });
+
+	it("opens an authorized preview from the file library", async () => {
+		api.listFolderContents.mockResolvedValue(library([{ file: savedFile }]));
+		api.getPersistentFileDownload.mockResolvedValue({
+			file: savedFile,
+			downloadTarget: { url: "https://download.invalid/file-1", expiresAt: "soon" },
+			preview: { kind: "text", url: "https://preview.invalid/file-1", expiresAt: "soon" },
+		});
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Preview contents", { status: 200 })));
+		const container = await renderLibrary();
+
+		const previewButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Preview");
+		await act(async () => { previewButton?.click(); await Promise.resolve(); });
+
+		expect(api.getPersistentFileDownload).toHaveBeenCalledWith("file-1", "verified-token");
+		expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Preview contents");
+	});
 
   it("uploads a selected file into the persistent library", async () => {
 	api.listFolderContents.mockResolvedValueOnce(library([])).mockResolvedValueOnce(library([{ file: savedFile }]));
@@ -283,6 +305,63 @@ describe("PersistentFileLibrary", () => {
 		expect(container.textContent).toContain("Read-only · Shared by Owner");
 		expect(container.textContent).toContain("project-notes.txt");
 		expect(container.textContent).not.toContain("Delete");
+		expect(window.location.search).toBe("?folder=folder-1&scope=shared");
+	});
+
+	it("restores a deeply nested owned folder from the workspace URL", async () => {
+		const projectFolder = { id: "project-folder", ownerId: "user-1", name: "Project", createdAt: "2026-09-04T12:00:00Z" };
+		const designsFolder = { id: "designs-folder", ownerId: "user-1", parentFolderId: "project-folder", name: "Designs", createdAt: "2026-09-04T12:01:00Z" };
+		const finalFolder = {
+			folder: { id: "final-folder", ownerId: "user-1", parentFolderId: "designs-folder", name: "Final", createdAt: "2026-09-04T12:02:00Z" },
+			role: "OWNER" as const,
+			owner: signedInUser,
+		};
+		window.history.replaceState(null, "", "/app?folder=final-folder");
+		api.listFolderContents.mockResolvedValue({ ...library([]), current: finalFolder, breadcrumbs: [projectFolder, designsFolder, finalFolder.folder] });
+
+		const container = await renderLibrary();
+
+		expect(api.listFolderContents).toHaveBeenCalledWith("verified-token", "final-folder", "owned", { sort: "newest", limit: 10 });
+		expect(container.querySelector("#library-title")?.textContent).toBe("Final");
+		expect(container.querySelector(".folder-breadcrumbs")?.textContent).toContain("My files/ Project/ Designs/ Final");
+		expect(window.location.search).toBe("?folder=final-folder");
+	});
+
+	it("updates the URL during folder navigation and responds to browser history", async () => {
+		const folder = {
+			folder: { id: "folder-1", ownerId: "user-1", name: "Launch", createdAt: "2026-09-04T12:00:00Z" },
+			role: "OWNER" as const,
+			owner: signedInUser,
+		};
+		api.listFolderContents
+			.mockResolvedValueOnce({ ...library([]), folders: [folder] })
+			.mockResolvedValueOnce({ ...library([]), current: folder, breadcrumbs: [folder.folder] })
+			.mockResolvedValueOnce(library([]))
+			.mockResolvedValueOnce({ ...library([]), current: folder, breadcrumbs: [folder.folder] });
+		const container = await renderLibrary();
+
+		const folderButton = container.querySelector<HTMLButtonElement>(".folder-card")!;
+		await act(async () => { folderButton.click(); });
+		expect(window.location.pathname).toBe("/app");
+		expect(window.location.search).toBe("?folder=folder-1");
+
+		const rootBreadcrumb = container.querySelector<HTMLButtonElement>(".folder-breadcrumbs button")!;
+		await act(async () => { rootBreadcrumb.click(); });
+		expect(window.location.search).toBe("");
+
+		window.history.replaceState(null, "", "/app?folder=folder-1");
+		await act(async () => {
+			window.dispatchEvent(new PopStateEvent("popstate"));
+			await Promise.resolve();
+		});
+		expect(api.listFolderContents).toHaveBeenLastCalledWith("verified-token", "folder-1", "owned", {
+			search: "",
+			sort: "newest",
+			filter: "all",
+			limit: 10,
+			cursor: "",
+		});
+		expect(container.querySelector("#library-title")?.textContent).toBe("Launch");
 	});
 
 	it("opens and closes folder access management", async () => {
@@ -405,7 +484,7 @@ describe("PersistentFileLibrary", () => {
 		const container = await renderLibrary();
 		expect(api.acceptFolderInvite).toHaveBeenCalledWith("joinme", "verified-token");
 		expect(container.textContent).toContain("Read-only · Shared by Owner");
-		expect(window.location.search).toBe("");
+		expect(window.location.search).toBe("?folder=folder-1&scope=shared");
 	});
 
 	it("opens the folder handed off by the public invitation page", async () => {
@@ -419,7 +498,7 @@ describe("PersistentFileLibrary", () => {
 		const container = await renderLibrary();
 		expect(api.listFolderContents).toHaveBeenCalledWith("verified-token", "folder-1", "shared", { sort: "newest", limit: 10 });
 		expect(container.textContent).toContain("Read-only · Shared by Owner");
-		expect(window.location.search).toBe("");
+		expect(window.location.search).toBe("?folder=folder-1&scope=shared");
 	});
 
 	it("lets contributors upload and manage only their own shared-folder files", async () => {

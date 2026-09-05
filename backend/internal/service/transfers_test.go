@@ -93,6 +93,9 @@ func TestShareRequiresCompletedUploadAndHonorsExpiration(t *testing.T) {
 	if resolved.DownloadTarget.URL == "" {
 		t.Fatal("download URL is empty")
 	}
+	if resolved.Preview == nil || resolved.Preview.Kind != PreviewKindText || resolved.Preview.URL == "" {
+		t.Fatalf("preview = %#v", resolved.Preview)
+	}
 
 	transfers.now = func() time.Time { return now.Add(24 * time.Hour) }
 	if _, err := transfers.ResolveShare(context.Background(), created.Share.ShortCode); !errors.Is(err, domain.ErrExpired) {
@@ -211,6 +214,10 @@ func (fakeBackend) SignResumableUpload(_ context.Context, key, _ string, expires
 
 func (fakeBackend) SignDownload(_ context.Context, key, _ string, expiresAt time.Time) (storage.DownloadTarget, error) {
 	return storage.DownloadTarget{URL: "https://download.invalid/" + key, ExpiresAt: expiresAt}, nil
+}
+
+func (fakeBackend) SignPreview(_ context.Context, key, _, _ string, expiresAt time.Time) (storage.PreviewTarget, error) {
+	return storage.PreviewTarget{URL: "https://preview.invalid/" + key, ExpiresAt: expiresAt}, nil
 }
 
 func (b fakeBackend) StatObject(_ context.Context, _ string) (storage.ObjectAttributes, error) {

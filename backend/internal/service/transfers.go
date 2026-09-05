@@ -56,6 +56,7 @@ type ResolveShareResult struct {
 	File           domain.File            `json:"file"`
 	Share          domain.ShareLink       `json:"share"`
 	DownloadTarget storage.DownloadTarget `json:"downloadTarget"`
+	Preview        *FilePreview           `json:"preview,omitempty"`
 }
 
 func NewTransfers(store TransferStore, storageBackend storage.TransferBackend, now Clock, anonymousTTL, signedURLTTL time.Duration, maxFileBytes int64) *Transfers {
@@ -167,10 +168,14 @@ func (s *Transfers) ResolveShare(ctx context.Context, code string) (ResolveShare
 	if err != nil {
 		return ResolveShareResult{}, fmt.Errorf("sign download: %w", err)
 	}
+	preview, err := signFilePreview(ctx, s.storage, shared.File, downloadExpiresAt)
+	if err != nil {
+		return ResolveShareResult{}, err
+	}
 	// Public share responses must not expose internal account identifiers.
 	shared.File.OwnerID = nil
 	shared.Share.CreatedBy = nil
-	return ResolveShareResult{File: shared.File, Share: shared.Share, DownloadTarget: target}, nil
+	return ResolveShareResult{File: shared.File, Share: shared.Share, DownloadTarget: target, Preview: preview}, nil
 }
 
 func normalizedMediaType(value string) string {

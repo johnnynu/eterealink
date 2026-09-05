@@ -76,6 +76,9 @@ func TestPersistentFileLifecycle(t *testing.T) {
 	if err != nil || download.DownloadTarget.URL == "" {
 		t.Fatalf("download = %#v, %v", download, err)
 	}
+	if download.Preview == nil || download.Preview.Kind != PreviewKindText || download.Preview.URL == "" {
+		t.Fatalf("preview = %#v", download.Preview)
+	}
 	if err := files.Delete(context.Background(), "user-1", created.File.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -243,6 +246,10 @@ func (*ownedFileBackend) SignResumableUpload(_ context.Context, key, _ string, e
 
 func (*ownedFileBackend) SignDownload(_ context.Context, key, _ string, expiresAt time.Time) (storage.DownloadTarget, error) {
 	return storage.DownloadTarget{URL: "https://download.invalid/" + key, ExpiresAt: expiresAt}, nil
+}
+
+func (*ownedFileBackend) SignPreview(_ context.Context, key, _, _ string, expiresAt time.Time) (storage.PreviewTarget, error) {
+	return storage.PreviewTarget{URL: "https://preview.invalid/" + key, ExpiresAt: expiresAt}, nil
 }
 
 func (b *ownedFileBackend) StatObject(context.Context, string) (storage.ObjectAttributes, error) {
