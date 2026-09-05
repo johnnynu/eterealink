@@ -6,6 +6,7 @@ import {
   createPersistentFileShare,
   createPersistentUpload,
   getCurrentUser,
+	updateCurrentUser,
   listPersistentFiles,
 	listFolderContents,
   revokePersistentFileShare,
@@ -54,6 +55,21 @@ describe("API client", () => {
       cache: "no-store",
     });
   });
+
+	it("updates or clears the authenticated custom display name", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+			user: { id: "user-1", email: "person@example.com", displayName: "Johnny", customDisplayName: "Johnny" },
+		}), { status: 200, headers: { "Content-Type": "application/json" } }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await updateCurrentUser("Johnny", "firebase-token");
+
+		expect(fetchMock).toHaveBeenCalledWith("/api/v1/me", {
+			method: "PATCH",
+			headers: { Authorization: "Bearer firebase-token", "Content-Type": "application/json" },
+			body: JSON.stringify({ displayName: "Johnny" }),
+		});
+	});
 
   it("sends verified identity with persistent file operations", async () => {
     const fetchMock = vi.fn()

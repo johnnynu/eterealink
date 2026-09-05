@@ -123,6 +123,30 @@ func TestPostgresFolderEventsCommitAndRollback(t *testing.T) {
 		t.Fatal("completed file did not produce an event")
 	}
 
+	customName := "Realtime Alias"
+	if _, err := database.UpdateCustomDisplayName(ctx, owner.ID, &customName); err != nil {
+		t.Fatal(err)
+	}
+	profileEvents := map[string]bool{}
+	for len(profileEvents) < 2 {
+		select {
+		case event := <-events:
+			profileEvents[event] = true
+		case <-time.After(time.Second):
+			t.Fatalf("profile update events = %#v", profileEvents)
+		}
+	}
+	if !profileEvents[folder.ID] || !profileEvents[child.ID] {
+		t.Fatalf("profile update events = %#v", profileEvents)
+	}
+	contents, _, err := database.GetFolderContents(ctx, owner.ID, folder.ID, now, domain.FileLibraryQuery{Sort: "newest", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contents.Current == nil || contents.Current.Owner.DisplayName != customName || len(contents.Files) != 1 || contents.Files[0].UploaderName != customName {
+		t.Fatalf("effective names after profile update = %#v", contents)
+	}
+
 	stopListener()
 	select {
 	case <-listenerDone:

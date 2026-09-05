@@ -30,6 +30,7 @@ import {
   uploadResumable,
 } from "@/lib/api";
 import { formatBytes, formatExpiry, formatFileType, formatRelativeDate } from "@/lib/format";
+import { PROFILE_UPDATE_FINISHED_EVENT, PROFILE_UPDATE_STARTED_EVENT } from "@/lib/events";
 import type {
 	FileDownloadResult,
   FileLibrarySummary,
@@ -158,6 +159,8 @@ export function PersistentFileLibrary() {
 	const backgroundRefreshPending = useRef(false);
 	const backgroundRefreshPendingNotice = useRef(false);
 	const folderUpdateToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const profileUpdatePending = useRef(false);
+	const profileUpdateGraceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const displayedFolderSnapshot = useRef("");
 	const displayedAccessSnapshot = useRef("");
 	const locationVersion = useRef(0);
@@ -407,6 +410,29 @@ export function PersistentFileLibrary() {
 	}
 
 	useEffect(() => {
+		function profileUpdateStarted() {
+			if (profileUpdateGraceTimer.current) clearTimeout(profileUpdateGraceTimer.current);
+			profileUpdatePending.current = true;
+		}
+
+		function profileUpdateFinished() {
+			if (profileUpdateGraceTimer.current) clearTimeout(profileUpdateGraceTimer.current);
+			profileUpdateGraceTimer.current = setTimeout(() => {
+				profileUpdatePending.current = false;
+				profileUpdateGraceTimer.current = null;
+			}, 1_500);
+		}
+
+		window.addEventListener(PROFILE_UPDATE_STARTED_EVENT, profileUpdateStarted);
+		window.addEventListener(PROFILE_UPDATE_FINISHED_EVENT, profileUpdateFinished);
+		return () => {
+			window.removeEventListener(PROFILE_UPDATE_STARTED_EVENT, profileUpdateStarted);
+			window.removeEventListener(PROFILE_UPDATE_FINISHED_EVENT, profileUpdateFinished);
+			if (profileUpdateGraceTimer.current) clearTimeout(profileUpdateGraceTimer.current);
+		};
+	}, []);
+
+	useEffect(() => {
 		const folderID = currentFolder?.folder.id;
 		if (!folderID) return;
 		let stopped = false;
@@ -432,11 +458,11 @@ export function PersistentFileLibrary() {
 						() => {
 							opened = true;
 							failedAttempts = 0;
-							void refreshCurrentFolderRef.current?.(true);
+							void refreshCurrentFolderRef.current?.(!profileUpdatePending.current);
 						},
 						() => {
 							changed = true;
-							void refreshCurrentFolderRef.current?.(true);
+							void refreshCurrentFolderRef.current?.(!profileUpdatePending.current);
 						},
 					);
 				} catch (streamError) {

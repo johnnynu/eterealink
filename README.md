@@ -10,7 +10,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 6—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, and safe browser previews—are complete.
+Phases 1 through 6.9—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, safe browser previews, realtime refreshes, and profiles—are complete.
 
 Implemented:
 
@@ -35,6 +35,7 @@ Implemented:
 - Frontend lint, unit-test, and production-build checks
 - Optional Firebase Google Sign-In without changing the anonymous transfer flow
 - Server-side Firebase ID-token verification and idempotent local user provisioning
+- Optional unique Eterealink display names with Google-name fallback, profile editing, and collaborator-facing realtime refreshes
 - Live end-to-end identity verification against the Eterealink Firebase project
 - Owner-scoped persistent uploads, file listing, authorized downloads, deletion, and revocable share links
 - A 5 GiB per-file limit for authenticated persistent uploads while anonymous transfers remain capped at 1 GiB combined
@@ -146,6 +147,7 @@ An anonymous transfer follows this path:
 | `GET` | `/healthz` | Process liveness |
 | `GET` | `/readyz` | Database-aware readiness |
 | `GET` | `/v1/me` | Verify a Firebase bearer token and return the provisioned user |
+| `PATCH` | `/v1/me` | Set or clear the authenticated user's optional unique Eterealink display name |
 | `POST` | `/v1/files` | Create owner-linked persistent file metadata and an upload target |
 | `GET` | `/v1/files` | List the authenticated user's ready files and aggregate storage usage |
 | `POST` | `/v1/files/{id}/complete` | Verify and complete an owned persistent upload |
@@ -238,6 +240,7 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 5.5. Landing page ✅ | Introduce account benefits alongside anonymous sharing, with a Google sign-in call to action and responsive feature section |
 | 6. Previews ✅ | Browser previews with a safe generic fallback |
 | 6.5. Realtime collaboration ✅ | Authenticated SSE folder invalidation, PostgreSQL notifications, and reconnect-safe refreshes |
+| 6.9. Profiles ✅ | Optional unique display names, Google-name fallback, account editing, and realtime collaborator refreshes |
 | 7-10. Cloud platform | Containers, Cloud Run, private networking, and Terraform |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |
 

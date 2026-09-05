@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PersistentFileLibrary } from "./persistent-file-library";
 import type { FileRecord } from "@/lib/types";
+import { PROFILE_UPDATE_FINISHED_EVENT, PROFILE_UPDATE_STARTED_EVENT } from "@/lib/events";
 
 const api = vi.hoisted(() => ({
 	acceptFolderInvite: vi.fn(),
@@ -376,6 +377,36 @@ describe("PersistentFileLibrary", () => {
 		});
 		expect(container.querySelector<HTMLInputElement>('input[aria-label="Select project-notes.txt"]')?.checked).toBe(true);
 		expect(container.textContent).toContain("1 selected");
+	});
+
+	it("silently refreshes an open folder after the current user updates their profile", async () => {
+		const folder = {
+			folder: { id: "folder-1", ownerId: "owner-1", name: "Launch", createdAt: "2026-09-04T12:00:00Z" },
+			role: "VIEWER" as const,
+			owner: { id: "owner-1", email: "owner@example.com", displayName: "Owner", createdAt: "2026-09-04T12:00:00Z" },
+		};
+		const renamedFolder = { ...folder, owner: { ...folder.owner, displayName: "Owner Alias" } };
+		window.history.replaceState(null, "", "/app?folder=folder-1&scope=shared");
+		api.listFolderContents
+			.mockResolvedValueOnce({ ...library([]), current: folder, breadcrumbs: [folder.folder] })
+			.mockResolvedValueOnce({ ...library([]), current: renamedFolder, breadcrumbs: [folder.folder] });
+		let sendChange: (() => void) | undefined;
+		api.streamFolderEvents.mockImplementation((_token, _folderID, signal: AbortSignal, _onOpen, onChange) => {
+			sendChange = () => onChange({ folderId: "folder-1" });
+			return new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+		});
+
+		const container = await renderLibrary();
+		await act(async () => {
+			await vi.waitFor(() => expect(api.streamFolderEvents).toHaveBeenCalled());
+			window.dispatchEvent(new Event(PROFILE_UPDATE_STARTED_EVENT));
+			sendChange?.();
+			await vi.waitFor(() => expect(api.listFolderContents).toHaveBeenCalledTimes(2));
+		});
+
+		expect(container.textContent).toContain("Shared by Owner Alias");
+		expect(document.querySelector(".folder-update-toast")).toBeNull();
+		window.dispatchEvent(new Event(PROFILE_UPDATE_FINISHED_EVENT));
 	});
 
 	it("updates the URL during folder navigation and responds to browser history", async () => {

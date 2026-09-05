@@ -16,6 +16,8 @@ export type UserRecord = {
   id: string;
   email: string;
   displayName: string;
+  identityDisplayName?: string;
+  customDisplayName?: string | null;
   createdAt: string;
 };
 

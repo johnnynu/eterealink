@@ -75,16 +75,43 @@ func (p *Postgres) listenFolderEvents(ctx context.Context, ready func(), publish
 }
 
 func (p *Postgres) UpsertUser(ctx context.Context, user domain.User) (domain.User, error) {
+	identityDisplayName := user.IdentityDisplayName
+	if identityDisplayName == "" {
+		identityDisplayName = user.DisplayName
+	}
 	row := p.pool.QueryRow(ctx, `
 		INSERT INTO users (id, firebase_uid, email, display_name, created_at)
 		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (firebase_uid) DO UPDATE
 		SET email = EXCLUDED.email, display_name = EXCLUDED.display_name
-		RETURNING id, firebase_uid, email, display_name, created_at`,
-		user.ID, user.FirebaseUID, user.Email, user.DisplayName, user.CreatedAt,
+		RETURNING id, firebase_uid, email,
+		          COALESCE(custom_display_name, NULLIF(BTRIM(display_name), ''), email),
+		          display_name, custom_display_name, created_at`,
+		user.ID, user.FirebaseUID, user.Email, identityDisplayName, user.CreatedAt,
 	)
-	if err := row.Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.CreatedAt); err != nil {
+	if err := row.Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.IdentityDisplayName, &user.CustomDisplayName, &user.CreatedAt); err != nil {
 		return domain.User{}, fmt.Errorf("upsert user: %w", err)
+	}
+	return user, nil
+}
+
+func (p *Postgres) UpdateCustomDisplayName(ctx context.Context, userID string, displayName *string) (domain.User, error) {
+	var user domain.User
+	err := p.pool.QueryRow(ctx, `
+		UPDATE users SET custom_display_name = $2 WHERE id = $1
+		RETURNING id, firebase_uid, email,
+		          COALESCE(custom_display_name, NULLIF(BTRIM(display_name), ''), email),
+		          display_name, custom_display_name, created_at`, userID, displayName).
+		Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.IdentityDisplayName, &user.CustomDisplayName, &user.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.User{}, domain.ErrNotFound
+	}
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) && postgresError.Code == "23505" && postgresError.ConstraintName == "users_custom_display_name_unique" {
+		return domain.User{}, domain.ErrDisplayNameTaken
+	}
+	if err != nil {
+		return domain.User{}, fmt.Errorf("update custom display name: %w", err)
 	}
 	return user, nil
 }
@@ -496,7 +523,8 @@ func (p *Postgres) GetRootContents(ctx context.Context, userID, scope string, no
 	if scope == "shared" {
 		rows, err := p.pool.Query(ctx, `
 			SELECT f.id, f.owner_id, f.parent_folder_id, f.name, f.created_at, m.role,
-			       u.id, u.firebase_uid, u.email, u.display_name, u.created_at
+			       u.id, u.firebase_uid, u.email,
+			       COALESCE(u.custom_display_name, NULLIF(BTRIM(u.display_name), ''), u.email), u.created_at
 			FROM folder_members m
 			JOIN folders f ON f.id = m.folder_id
 			JOIN users u ON u.id = f.owner_id
@@ -649,7 +677,10 @@ func (p *Postgres) GetFolderContents(ctx context.Context, userID, folderID strin
 
 func (p *Postgres) userByID(ctx context.Context, userID string) (domain.User, error) {
 	var user domain.User
-	err := p.pool.QueryRow(ctx, `SELECT id, firebase_uid, email, display_name, created_at FROM users WHERE id = $1`, userID).
+	err := p.pool.QueryRow(ctx, `
+		SELECT id, firebase_uid, email,
+		       COALESCE(custom_display_name, NULLIF(BTRIM(display_name), ''), email), created_at
+		FROM users WHERE id = $1`, userID).
 		Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.User{}, domain.ErrNotFound
@@ -664,7 +695,7 @@ func (p *Postgres) listFolderFiles(ctx context.Context, ownerID string, folderID
 	statement := `
 		SELECT f.id, f.owner_id, f.folder_id, f.transfer_id, f.storage_key, f.original_name, f.mime_type,
 		       f.size_bytes, f.upload_status, f.created_at, f.completed_at, f.expires_at,
-		       COALESCE(NULLIF(BTRIM(uploader.display_name), ''), 'Eterealink user'),
+		       COALESCE(uploader.custom_display_name, NULLIF(BTRIM(uploader.display_name), ''), uploader.email, 'Eterealink user'),
 		       s.id, s.short_code, s.file_id, s.folder_id, s.transfer_id, s.created_by, s.created_at, s.expires_at, s.revoked_at
 		FROM files f
 		JOIN users uploader ON uploader.id = f.owner_id
@@ -806,7 +837,9 @@ func (p *Postgres) ListFolderMembers(ctx context.Context, ownerID, folderID stri
 			FROM folders parent JOIN ancestors child ON child.parent_folder_id = parent.id
 			WHERE parent.owner_id = $2
 		), ranked AS (
-			SELECT u.id, u.firebase_uid, u.email, u.display_name, u.created_at,
+			SELECT u.id, u.firebase_uid, u.email,
+			       COALESCE(u.custom_display_name, NULLIF(BTRIM(u.display_name), ''), u.email) AS effective_display_name,
+			       u.created_at,
 			       m.role, m.created_at AS member_created_at, m.expires_at,
 			       a.id AS source_folder_id, a.name AS source_folder_name, a.depth,
 			       ROW_NUMBER() OVER (
@@ -819,7 +852,7 @@ func (p *Postgres) ListFolderMembers(ctx context.Context, ownerID, folderID stri
 			JOIN users u ON u.id = m.user_id
 			WHERE m.expires_at IS NULL OR m.expires_at > now()
 		)
-		SELECT id, firebase_uid, email, display_name, created_at, role, member_created_at, expires_at,
+		SELECT id, firebase_uid, email, effective_display_name, created_at, role, member_created_at, expires_at,
 		       source_folder_id, source_folder_name, depth > 0
 		FROM ranked WHERE member_rank = 1 ORDER BY lower(email)`, folderID, ownerID)
 	if err != nil {
@@ -954,7 +987,7 @@ func (p *Postgres) GetFolderInvitePreview(ctx context.Context, shortCode string,
 	var preview domain.FolderInvitePreview
 	var revokedAt *time.Time
 	err := p.pool.QueryRow(ctx, `
-		SELECT f.name, COALESCE(NULLIF(BTRIM(u.display_name), ''), 'An Eterealink user'), i.role, i.expires_at, i.revoked_at
+		SELECT f.name, COALESCE(u.custom_display_name, NULLIF(BTRIM(u.display_name), ''), u.email, 'An Eterealink user'), i.role, i.expires_at, i.revoked_at
 		FROM folder_invites i
 		JOIN folders f ON f.id = i.folder_id
 		JOIN users u ON u.id = f.owner_id
@@ -987,7 +1020,8 @@ func (p *Postgres) AcceptFolderInvite(ctx context.Context, userID, shortCode str
 	err = tx.QueryRow(ctx, `
 		SELECT i.id, i.folder_id, i.created_by, i.short_code, i.role, i.created_at, i.expires_at, i.revoked_at,
 		       f.id, f.owner_id, f.parent_folder_id, f.name, f.created_at,
-		       u.id, u.firebase_uid, u.email, u.display_name, u.created_at
+		       u.id, u.firebase_uid, u.email,
+		       COALESCE(u.custom_display_name, NULLIF(BTRIM(u.display_name), ''), u.email), u.created_at
 		FROM folder_invites i JOIN folders f ON f.id = i.folder_id JOIN users u ON u.id = f.owner_id
 		WHERE i.short_code = $1 FOR UPDATE OF i`, shortCode).Scan(
 		&invite.ID, &invite.FolderID, &invite.CreatedBy, &invite.ShortCode, &invite.Role, &invite.CreatedAt, &invite.ExpiresAt, &invite.RevokedAt,

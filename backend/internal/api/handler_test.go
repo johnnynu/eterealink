@@ -115,6 +115,55 @@ func TestCurrentUserReportsDisabledAuthentication(t *testing.T) {
 	}
 }
 
+func TestUpdateCurrentUserDisplayName(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := &userStore{}
+	users := service.NewUsers(store, time.Now)
+	verifier := tokenVerifier{claims: identity.Claims{UID: "firebase-user", Email: "person@example.com", DisplayName: "Google Person"}}
+	handler := NewHandler(nil, nil, nil, users, verifier, readiness{}, logger)
+
+	request := httptest.NewRequest(http.MethodPatch, "/v1/me", strings.NewReader(`{"displayName":"  Johnny   Cloud "}`))
+	request.Header.Set("Authorization", "Bearer verified-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"displayName":"Johnny Cloud"`) || !strings.Contains(response.Body.String(), `"identityDisplayName":"Google Person"`) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPatch, "/v1/me", strings.NewReader(`{"displayName":null}`))
+	request.Header.Set("Authorization", "Bearer verified-token")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"displayName":"Google Person"`) || !strings.Contains(response.Body.String(), `"customDisplayName":null`) {
+		t.Fatalf("clear response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestUpdateCurrentUserDisplayNameValidationAndConflict(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store := &userStore{}
+	users := service.NewUsers(store, time.Now)
+	verifier := tokenVerifier{claims: identity.Claims{UID: "firebase-user", Email: "person@example.com", DisplayName: "Person"}}
+	handler := NewHandler(nil, nil, nil, users, verifier, readiness{}, logger)
+
+	request := httptest.NewRequest(http.MethodPatch, "/v1/me", strings.NewReader(`{"displayName":" "}`))
+	request.Header.Set("Authorization", "Bearer verified-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), `"code":"validation_failed"`) {
+		t.Fatalf("validation response = %d %s", response.Code, response.Body.String())
+	}
+
+	store.updateErr = service.ErrDisplayNameTaken
+	request = httptest.NewRequest(http.MethodPatch, "/v1/me", strings.NewReader(`{"displayName":"Someone"}`))
+	request.Header.Set("Authorization", "Bearer verified-token")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"display_name_taken"`) {
+		t.Fatalf("conflict response = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestPersistentUploadUsesAuthenticatedOwner(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
@@ -202,16 +251,35 @@ func (v tokenVerifier) VerifyIDToken(_ context.Context, token string) (identity.
 	return v.claims, v.err
 }
 
-type userStore struct{ user domain.User }
+type userStore struct {
+	user      domain.User
+	updateErr error
+}
 
 func (s *userStore) UpsertUser(_ context.Context, user domain.User) (domain.User, error) {
 	if s.user.FirebaseUID != "" && s.user.FirebaseUID == user.FirebaseUID {
 		s.user.Email = user.Email
-		s.user.DisplayName = user.DisplayName
+		s.user.IdentityDisplayName = user.DisplayName
+		if s.user.CustomDisplayName == nil {
+			s.user.DisplayName = user.DisplayName
+		}
 		return s.user, nil
 	}
+	user.IdentityDisplayName = user.DisplayName
 	s.user = user
 	return user, nil
+}
+
+func (s *userStore) UpdateCustomDisplayName(_ context.Context, userID string, displayName *string) (domain.User, error) {
+	if s.updateErr != nil {
+		return domain.User{}, s.updateErr
+	}
+	s.user.CustomDisplayName = displayName
+	s.user.DisplayName = s.user.IdentityDisplayName
+	if displayName != nil {
+		s.user.DisplayName = *displayName
+	}
+	return s.user, nil
 }
 
 type readiness struct{ err error }

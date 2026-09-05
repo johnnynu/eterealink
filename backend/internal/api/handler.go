@@ -89,6 +89,7 @@ func newHandler(
 	mux.HandleFunc("GET /healthz", handler.health)
 	mux.HandleFunc("GET /readyz", handler.ready)
 	mux.Handle("GET /v1/me", handler.requireAuthentication(http.HandlerFunc(handler.me)))
+	mux.Handle("PATCH /v1/me", handler.requireAuthentication(http.HandlerFunc(handler.updateMe)))
 	mux.Handle("POST /v1/files", handler.requireAuthentication(http.HandlerFunc(handler.createPersistentFile)))
 	mux.Handle("GET /v1/files", handler.requireAuthentication(http.HandlerFunc(handler.listPersistentFiles)))
 	mux.Handle("POST /v1/files/{id}/complete", handler.requireAuthentication(http.HandlerFunc(handler.completePersistentFile)))
@@ -178,6 +179,49 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
+func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
+	user, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	var input struct {
+		DisplayName json.RawMessage `json:"displayName"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(input.DisplayName) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "displayName is required")
+		return
+	}
+	var displayName *string
+	if string(input.DisplayName) != "null" {
+		var value string
+		if err := json.Unmarshal(input.DisplayName, &value); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "validation_failed", "displayName must be a string or null")
+			return
+		}
+		displayName = &value
+	}
+
+	updated, err := h.users.UpdateDisplayName(r.Context(), user.ID, displayName)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidDisplayName):
+			writeError(w, http.StatusUnprocessableEntity, "validation_failed", err.Error())
+		case errors.Is(err, service.ErrDisplayNameTaken):
+			writeError(w, http.StatusConflict, "display_name_taken", "that display name is already in use")
+		default:
+			h.logger.Error("update profile failed", "user_id", user.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to update profile")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"user": updated})
 }
 
 func authenticatedUser(r *http.Request) (domain.User, bool) {

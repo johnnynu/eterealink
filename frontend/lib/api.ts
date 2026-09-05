@@ -75,6 +75,16 @@ export async function getCurrentUser(idToken: string): Promise<UserRecord> {
   return result.user;
 }
 
+export async function updateCurrentUser(displayName: string | null, idToken: string): Promise<UserRecord> {
+  const response = await fetch("/api/v1/me", {
+    method: "PATCH",
+    headers: bearerHeaders(idToken, true),
+    body: JSON.stringify({ displayName }),
+  });
+  const result = await parseResponse<{ user: UserRecord }>(response);
+  return result.user;
+}
+
 function bearerHeaders(idToken: string, contentType = false) {
   return {
     Authorization: `Bearer ${idToken}`,

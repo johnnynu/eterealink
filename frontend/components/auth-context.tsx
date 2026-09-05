@@ -7,8 +7,9 @@ import {
   signInWithPopup,
   signOut as firebaseSignOut,
 } from "firebase/auth";
-import { getCurrentUser } from "@/lib/api";
+import { getCurrentUser, updateCurrentUser } from "@/lib/api";
 import { firebaseConfigured, getFirebaseAuth } from "@/lib/firebase";
+import { PROFILE_UPDATE_FINISHED_EVENT, PROFILE_UPDATE_STARTED_EVENT } from "@/lib/events";
 import type { UserRecord } from "@/lib/types";
 
 type AuthContextValue = {
@@ -18,6 +19,7 @@ type AuthContextValue = {
   user: UserRecord | null;
   error: string;
   getIDToken: () => Promise<string>;
+  updateProfile: (displayName: string | null) => Promise<UserRecord>;
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
 };
@@ -87,6 +89,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return firebaseUser.getIdToken();
   }, []);
 
+  const updateProfile = useCallback(async (displayName: string | null) => {
+    window.dispatchEvent(new Event(PROFILE_UPDATE_STARTED_EVENT));
+    try {
+      const idToken = await getIDToken();
+      const updated = await updateCurrentUser(displayName, idToken);
+      setUser(updated);
+      return updated;
+    } finally {
+      window.dispatchEvent(new Event(PROFILE_UPDATE_FINISHED_EVENT));
+    }
+  }, [getIDToken]);
+
   async function signOut() {
     const auth = getFirebaseAuth();
     if (!auth) return;
@@ -109,9 +123,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user,
     error,
     getIDToken,
+    updateProfile,
     signIn,
     signOut,
-  }), [loading, busy, user, error, getIDToken]);
+  }), [loading, busy, user, error, getIDToken, updateProfile]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

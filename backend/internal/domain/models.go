@@ -6,19 +6,22 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("resource not found")
-	ErrExpired       = errors.New("resource expired")
-	ErrRevoked       = errors.New("resource revoked")
-	ErrConflict      = errors.New("resource conflict")
-	ErrQuotaExceeded = errors.New("storage quota exceeded")
+	ErrNotFound         = errors.New("resource not found")
+	ErrExpired          = errors.New("resource expired")
+	ErrRevoked          = errors.New("resource revoked")
+	ErrConflict         = errors.New("resource conflict")
+	ErrQuotaExceeded    = errors.New("storage quota exceeded")
+	ErrDisplayNameTaken = errors.New("display name is already in use")
 )
 
 type User struct {
-	ID          string    `json:"id"`
-	FirebaseUID string    `json:"-"`
-	Email       string    `json:"email"`
-	DisplayName string    `json:"displayName"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID                  string    `json:"id"`
+	FirebaseUID         string    `json:"-"`
+	Email               string    `json:"email"`
+	DisplayName         string    `json:"displayName"`
+	IdentityDisplayName string    `json:"identityDisplayName,omitempty"`
+	CustomDisplayName   *string   `json:"customDisplayName"`
+	CreatedAt           time.Time `json:"createdAt"`
 }
 
 type FileStatus string
