@@ -10,7 +10,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 7—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, safe browser previews, realtime refreshes, profiles, and production containerization—are complete.
+Phases 1 through 8—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, safe browser previews, realtime refreshes, profiles, production containerization, and the first public Cloud Run deployment—are complete.
 
 Implemented:
 
@@ -56,8 +56,12 @@ Implemented:
 - Original-quality video playback with Eterealink controls for seeking, ten-second skips, volume, playback speed, picture-in-picture, fullscreen, source-resolution display, buffering and codec feedback, auto-hiding controls, and remembered preferences
 - Multi-stage, non-root production images for the Go API/migration runner and standalone Next.js server
 - A health-gated Docker Compose stack that runs PostgreSQL, one-shot migrations, the API, and the frontend in dependency order
+- Immutable API images in Artifact Registry, one-shot Cloud Run migration executions, and a public scale-to-zero Cloud Run API
+- A transitional zonal Cloud SQL PostgreSQL database reached through the managed Cloud SQL connector with its connection string stored in Secret Manager
 
 The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
+
+The Phase 8 API is live at [`https://eterealink-api-300331831616.us-west1.run.app`](https://eterealink-api-300331831616.us-west1.run.app). Its public process and dependency checks are `/health` and `/readyz`.
 
 ### Post-MVP media roadmap
 
@@ -257,7 +261,8 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 6.5. Realtime collaboration ✅ | Authenticated SSE folder invalidation, PostgreSQL notifications, and reconnect-safe refreshes |
 | 6.9. Profiles ✅ | Optional unique display names, Google-name fallback, account editing, and realtime collaborator refreshes |
 | 7. Containers ✅ | Multi-stage non-root images, standalone frontend output, migration job, health checks, and a production-like local Compose stack |
-| 8-10. Cloud platform | Cloud Run, private networking, and Terraform |
+| 8. Cloud Run ✅ | Immutable Artifact Registry image, migration job, Cloud SQL connector bridge, and public API |
+| 9-10. Cloud platform | Private networking and Terraform |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |
 
 The product MVP is complete. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.
