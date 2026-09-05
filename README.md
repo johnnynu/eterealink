@@ -147,6 +147,7 @@ An anonymous transfer follows this path:
 | Method | Path | Behavior |
 |---|---|---|
 | `GET` | `/healthz` | Process liveness |
+| `GET` | `/health` | Process liveness through the Cloud Run public endpoint |
 | `GET` | `/readyz` | Database-aware readiness |
 | `GET` | `/v1/me` | Verify a Firebase bearer token and return the provisioned user |
 | `PATCH` | `/v1/me` | Set or clear the authenticated user's optional unique Eterealink display name |

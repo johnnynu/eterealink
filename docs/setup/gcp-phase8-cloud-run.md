@@ -19,7 +19,7 @@ The Cloud SQL instance has a public address but no authorized networks. The API 
 
 ## Deploy
 
-The active `gcloud` account must have access to the project, billing must be enabled, and the CLI project must already be `eterealink`. The script does not create or download service-account keys.
+The active `gcloud` account must have access to the project, billing must be enabled, and the CLI project must already be `eterealink`. Docker Desktop is also required as a fallback when Cloud Build submission is unavailable. The script does not create or download service-account keys.
 
 ```bash
 gcloud auth login
@@ -27,7 +27,7 @@ gcloud config set project eterealink
 make phase8-deploy
 ```
 
-Run from a clean, committed worktree so the immutable image tag describes its source exactly. The script reuses an image already published for that commit, preserves an existing database secret, updates the migration job, waits for migrations to succeed, deploys the API revision, and checks both health endpoints.
+Run from a clean, committed worktree so the immutable image tag describes its source exactly. The script reuses an image already published for that commit, preserves an existing database secret, updates the migration job, waits for migrations to succeed, deploys the API revision, and checks both health endpoints. It prefers Cloud Build and falls back to a local `linux/amd64` Docker build when Cloud Build rejects submission.
 
 Defaults can be overridden with environment variables such as `PROJECT_ID`, `REGION`, `SERVICE`, `DB_INSTANCE`, and `GCS_BUCKET`.
 
@@ -43,6 +43,8 @@ Expected endpoint responses:
 {"status":"ok"}
 {"status":"ready"}
 ```
+
+The public liveness endpoint is `/health`. `/healthz` remains available inside the container and in local development, but Google reserves that path at the `run.app` frontend and returns an edge 404 before it reaches the application.
 
 Inspect the deployed image digest and latest revision when troubleshooting:
 

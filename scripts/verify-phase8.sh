@@ -11,7 +11,7 @@ service_url="$(gcloud run services describe "${SERVICE}" \
 	--region="${REGION}" \
 	--format='value(status.url)')"
 
-curl --fail --silent --show-error "${service_url}/healthz"
+curl --fail --silent --show-error "${service_url}/health"
 echo
 curl --fail --silent --show-error "${service_url}/readyz"
 echo

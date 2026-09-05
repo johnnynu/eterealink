@@ -86,6 +86,7 @@ func newHandler(
 		readiness: readiness, logger: logger, folders: folders, folderEvents: folderEvents,
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", handler.health)
 	mux.HandleFunc("GET /healthz", handler.health)
 	mux.HandleFunc("GET /readyz", handler.ready)
 	mux.Handle("GET /v1/me", handler.requireAuthentication(http.HandlerFunc(handler.me)))

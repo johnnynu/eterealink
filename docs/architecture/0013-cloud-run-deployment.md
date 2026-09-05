@@ -16,7 +16,7 @@ Phase 7 produced deployable API and migration binaries in one non-root container
 - Use the smallest zonal Cloud SQL PostgreSQL instance as a transitional Phase 8 database. Cloud Run connects through the managed Cloud SQL integration and a Unix socket. The instance has a public IP so the connector can reach it, but it has no authorized external networks.
 - Store the database connection string in Secret Manager and expose it only to the runtime service account.
 - Allow unauthenticated invocation because anonymous transfers and public share resolution are product requirements. Firebase bearer tokens continue to protect account endpoints.
-- Scale the API to zero, cap it at three instances, and configure database-aware startup plus process liveness probes.
+- Scale the API to zero, cap it at three instances, and configure database-aware startup plus process liveness probes. Use `/health` for the public and Cloud Run liveness path because Google reserves `/healthz` at its frontend; retain `/healthz` for local compatibility.
 - Set the Cloud Run request timeout and Go server write timeout to five minutes so the existing four-minute-thirty-second SSE rotation can finish normally.
 
 ## Consequences

@@ -15,7 +15,7 @@ RUNTIME_SERVICE_ACCOUNT="${RUNTIME_SERVICE_ACCOUNT:-eterealink-api@${PROJECT_ID}
 GCS_BUCKET="${GCS_BUCKET:-eterealink-files}"
 FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-${PROJECT_ID}}"
 
-for command in gcloud git openssl; do
+for command in curl gcloud git openssl; do
 	if ! command -v "${command}" >/dev/null 2>&1; then
 		echo "required command is unavailable: ${command}" >&2
 		exit 1
@@ -69,11 +69,23 @@ if gcloud artifacts docker images describe "${image_uri}" \
 	echo "Reusing existing immutable API image ${image_uri}."
 else
 	echo "Building immutable API image ${image_uri}..."
-	gcloud builds submit backend \
+	if ! gcloud builds submit backend \
 		--project="${PROJECT_ID}" \
 		--region="${REGION}" \
 		--tag="${image_uri}" \
-		--quiet
+		--quiet; then
+		if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+			echo "Cloud Build was denied and a running Docker engine is unavailable" >&2
+			exit 1
+		fi
+		echo "Cloud Build was denied; building and pushing with the local Docker engine..."
+		gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+		docker buildx build \
+			--platform=linux/amd64 \
+			--tag="${image_uri}" \
+			--push \
+			backend
+	fi
 fi
 
 if ! gcloud sql instances describe "${DB_INSTANCE}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
@@ -187,7 +199,7 @@ gcloud run deploy "${SERVICE}" \
 	--max=3 \
 	--timeout=300s \
 	--startup-probe="httpGet.path=/readyz,httpGet.port=8080,timeoutSeconds=3,periodSeconds=5,failureThreshold=12" \
-	--liveness-probe="httpGet.path=/healthz,httpGet.port=8080,timeoutSeconds=3,periodSeconds=10,failureThreshold=3" \
+	--liveness-probe="httpGet.path=/health,httpGet.port=8080,timeoutSeconds=3,periodSeconds=10,failureThreshold=3" \
 	--allow-unauthenticated \
 	--quiet
 
@@ -197,7 +209,7 @@ service_url="$(gcloud run services describe "${SERVICE}" \
 	--format='value(status.url)')"
 
 echo "Verifying ${service_url}..."
-curl --fail --silent --show-error "${service_url}/healthz"
+curl --fail --silent --show-error "${service_url}/health"
 echo
 curl --fail --silent --show-error "${service_url}/readyz"
 echo

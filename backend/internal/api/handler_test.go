@@ -22,10 +22,12 @@ func TestHealthAndReadiness(t *testing.T) {
 
 	t.Run("health does not depend on database", func(t *testing.T) {
 		handler := NewHandler(nil, nil, nil, nil, nil, readiness{err: errors.New("offline")}, logger)
-		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-		if response.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", response.Code)
+		for _, path := range []string{"/health", "/healthz"} {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+			if response.Code != http.StatusOK {
+				t.Errorf("%s status = %d, want 200", path, response.Code)
+			}
 		}
 	})
 
