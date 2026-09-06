@@ -1,6 +1,6 @@
 # Phase 8 Cloud Run deployment
 
-Phase 8 publishes the Go API image to Artifact Registry, applies migrations with a Cloud Run Job, and deploys the public API service. The checked-in deployment script also creates the smallest database bridge that lets the service work before Phase 9 adds private networking.
+Phase 8 publishes the Go API and Next.js frontend images to Artifact Registry, applies migrations with a Cloud Run Job, and deploys the complete public application. The checked-in deployment script also creates the smallest database bridge that lets the API work before Phase 9 adds private networking.
 
 ## Resources
 
@@ -9,17 +9,19 @@ Phase 8 publishes the Go API image to Artifact Registry, applies migrations with
 | Project and region | `eterealink`, `us-west1` |
 | Artifact Registry repository | `eterealink` |
 | API image | `api:<12-character-git-commit>` |
-| Cloud Run service | `eterealink-api` |
+| Frontend image | `frontend:<12-character-git-commit>` |
+| Cloud Run services | `eterealink-api`, `eterealink-web` |
 | Migration job | `eterealink-migrate` |
 | Cloud SQL instance | `eterealink-db` (`db-f1-micro`, zonal, PostgreSQL 17) |
 | Database secret | `eterealink-database-url` |
 | Runtime identity | `eterealink-api@eterealink.iam.gserviceaccount.com` |
+| Frontend identity | `eterealink-web@eterealink.iam.gserviceaccount.com` |
 
 The Cloud SQL instance has a public address but no authorized networks. The API and migration job reach it through Cloud Run's managed Cloud SQL integration. Phase 9 replaces this transitional path with private IP and Direct VPC egress.
 
 ## Deploy
 
-The active `gcloud` account must have access to the project, billing must be enabled, and the CLI project must already be `eterealink`. Docker Desktop is also required as a fallback when Cloud Build submission is unavailable. The script does not create or download service-account keys.
+The active `gcloud` account must have access to the project, billing must be enabled, the CLI project must already be `eterealink`, and `frontend/.env.local` must contain the Firebase web configuration. Docker Desktop is also required as a fallback when the API Cloud Build submission is unavailable. The script does not create or download service-account keys.
 
 ```bash
 gcloud auth login
@@ -27,7 +29,7 @@ gcloud config set project eterealink
 make phase8-deploy
 ```
 
-Run from a clean, committed worktree so the immutable image tag describes its source exactly. The script reuses an image already published for that commit, preserves an existing database secret, updates the migration job, waits for migrations to succeed, deploys the API revision, and checks both health endpoints. It prefers Cloud Build and falls back to a local `linux/amd64` Docker build when Cloud Build rejects submission.
+Run from a clean, committed worktree so both immutable image tags describe their source exactly. The script reuses images already published for that commit, preserves an existing database secret, updates the migration job, waits for migrations to succeed, deploys both services, updates Firebase and bucket CORS, and checks the API directly and through the frontend proxy. It prefers Cloud Build and falls back to a local `linux/amd64` Docker build when an API Cloud Build submission is unavailable.
 
 Defaults can be overridden with environment variables such as `PROJECT_ID`, `REGION`, `SERVICE`, `DB_INSTANCE`, and `GCS_BUCKET`.
 
@@ -59,4 +61,4 @@ gcloud run jobs executions list \
   --region=us-west1
 ```
 
-Cloud Run assigns the API an HTTPS `run.app` URL. Phase 8 deploys only the API; the frontend stays local until its hosting path is selected in a later phase.
+The complete application is available at `https://eterealink-web-300331831616.us-west1.run.app`. The frontend keeps API control-plane calls same-origin through its server-side `/api` proxy; file bytes continue to move directly between the browser and Cloud Storage.
