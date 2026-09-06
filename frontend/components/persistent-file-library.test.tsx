@@ -107,6 +107,33 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+function deferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((nextResolve, nextReject) => {
+		resolve = nextResolve;
+		reject = nextReject;
+	});
+	return { promise, resolve, reject };
+}
+
+function recoveryRecord(overrides: Partial<UploadRecoveryRecord> = {}): UploadRecoveryRecord {
+	return {
+		fileId: "pending-1",
+		userId: "user-1",
+		sessionUrl: "https://upload.invalid/private",
+		fileName: "same.txt",
+		fileSize: 5,
+		mimeType: "text/plain",
+		lastModified: 100,
+		confirmedOffset: 2,
+		completionPending: false,
+		createdAt: 1,
+		updatedAt: 1,
+		...overrides,
+	};
+}
+
 describe("PersistentFileLibrary", () => {
   it("lists ready files and requires confirmation before deletion", async () => {
 	api.listFolderContents.mockResolvedValue(library([{ file: savedFile }]));
@@ -220,6 +247,71 @@ describe("PersistentFileLibrary", () => {
 		expect(container.textContent).not.toContain("private-session");
 	});
 
+	it("shows one row while an active upload also has browser recovery data", async () => {
+		const uploadGate = deferred<void>();
+		recovery.listUploadRecoveries.mockResolvedValueOnce([recoveryRecord({ fileId: "other-pending", fileName: "other.txt" })]);
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		api.createPersistentUpload.mockResolvedValue({
+			file: { ...savedFile, status: "PENDING" },
+			uploadTarget: { url: "https://upload.invalid/start", method: "POST", headers: {}, expiresAt: "soon" },
+		});
+		api.uploadResumable.mockImplementation((_file, _target, _progress, callbacks) => ({
+			promise: (async () => {
+				await callbacks.onSession?.("https://upload.invalid/private-session");
+				await callbacks.onConfirmedOffset?.(2);
+				await uploadGate.promise;
+			})(),
+			abort: vi.fn(),
+		}));
+		api.completePersistentUpload.mockResolvedValue(savedFile);
+		const container = await renderLibrary();
+		const input = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [new File(["hello"], "project-notes.txt", { type: "text/plain", lastModified: 100 })] });
+
+		act(() => input.dispatchEvent(new Event("change", { bubbles: true })));
+		await vi.waitFor(() => expect(recovery.saveUploadRecovery).toHaveBeenCalled());
+
+		expect(container.querySelectorAll(".upload-queue-item")).toHaveLength(1);
+		expect(container.querySelectorAll(".upload-recovery-item")).toHaveLength(1);
+		expect(Array.from(container.querySelectorAll(".upload-queue-item strong, .upload-recovery-item strong"))
+			.filter((element) => element.textContent === "project-notes.txt")).toHaveLength(1);
+		expect(container.querySelector<HTMLInputElement>(".upload-recovery-item input")?.disabled).toBe(true);
+
+		uploadGate.resolve();
+		await vi.waitFor(() => expect(container.textContent).toContain("Complete"));
+	});
+
+	it("updates confirmed bytes and percentage live during an initial upload", async () => {
+		const uploadGate = deferred<void>();
+		let callbacks: Parameters<typeof api.uploadResumable>[3] | undefined;
+		const file = new File(["0123456789"], "ten.txt", { type: "text/plain", lastModified: 100 });
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		api.createPersistentUpload.mockResolvedValue({
+			file: { ...savedFile, id: "pending-10", originalName: file.name, sizeBytes: file.size, status: "PENDING" },
+			uploadTarget: { url: "https://upload.invalid/start", method: "POST", headers: {}, expiresAt: "soon" },
+		});
+		api.uploadResumable.mockImplementation((_file, _target, _progress, nextCallbacks) => {
+			callbacks = nextCallbacks;
+			return { promise: uploadGate.promise, abort: vi.fn() };
+		});
+		api.completePersistentUpload.mockResolvedValue(savedFile);
+		const container = await renderLibrary();
+		const input = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [file] });
+		act(() => input.dispatchEvent(new Event("change", { bubbles: true })));
+		await vi.waitFor(() => expect(callbacks).toBeDefined());
+
+		await act(async () => {
+			await callbacks?.onSession?.("https://upload.invalid/private-session");
+			await callbacks?.onConfirmedOffset?.(4);
+		});
+
+		expect(container.querySelector(".upload-queue-item small")?.textContent).toContain("4 B of 10 B · 40%");
+		expect(recovery.updateUploadRecovery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ confirmedOffset: 4 }));
+		uploadGate.resolve();
+		await vi.waitFor(() => expect(container.textContent).toContain("Complete"));
+	});
+
 	it("rejects a mismatched recovery reselection", async () => {
 		recovery.listUploadRecoveries.mockResolvedValueOnce([{
 			fileId: "pending-1", userId: "user-1", sessionUrl: "https://upload.invalid/private",
@@ -237,6 +329,141 @@ describe("PersistentFileLibrary", () => {
 		expect(container.textContent).toContain("name, size, modified date, and type must match");
 	});
 
+	it("moves a reselected recovery through checking, uploading, finalizing, and complete", async () => {
+		const uploadGate = deferred<void>();
+		const completionGate = deferred<FileRecord>();
+		let confirmed: ((offset: number) => void | Promise<void>) | undefined;
+		recovery.listUploadRecoveries.mockResolvedValueOnce([recoveryRecord()]);
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		api.resumeResumableUpload.mockImplementation((_file, _session, _progress, onConfirmedOffset) => {
+			confirmed = onConfirmedOffset;
+			return { promise: uploadGate.promise, abort: vi.fn() };
+		});
+		api.completePersistentUpload.mockReturnValue(completionGate.promise);
+		const container = await renderLibrary();
+		await act(async () => { await Promise.resolve(); });
+
+		expect(container.textContent).toContain("Upload paused at 2 B of 5 B — select the original file to continue.");
+		const input = container.querySelector<HTMLInputElement>(".upload-recovery-item input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [new File(["hello"], "same.txt", { type: "text/plain", lastModified: 100 })] });
+		act(() => input.dispatchEvent(new Event("change", { bubbles: true })));
+		await vi.waitFor(() => expect(api.resumeResumableUpload).toHaveBeenCalledTimes(1));
+
+		expect(container.querySelectorAll(".upload-recovery-item")).toHaveLength(0);
+		expect(container.querySelectorAll(".upload-queue-item")).toHaveLength(1);
+		expect(container.textContent).toContain("Checking server progress…");
+
+		await act(async () => { await confirmed?.(3); });
+		expect(container.textContent).toContain("Uploading · 3 B of 5 B · 60%");
+		expect(Array.from(container.querySelectorAll("button")).some((button) => button.textContent === "Pause")).toBe(true);
+		expect(recovery.updateUploadRecovery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ confirmedOffset: 3 }));
+
+		uploadGate.resolve();
+		await vi.waitFor(() => expect(container.textContent).toContain("Finalizing upload…"));
+		completionGate.resolve(savedFile);
+		await vi.waitFor(() => expect(container.textContent).toContain("Complete"));
+		expect(recovery.deleteUploadRecovery).toHaveBeenCalledWith("pending-1");
+	});
+
+	it("prevents concurrent recovery and new-upload requests", async () => {
+		const uploadGate = deferred<void>();
+		const first = recoveryRecord();
+		const second = recoveryRecord({ fileId: "pending-2", fileName: "other.txt", sessionUrl: "https://upload.invalid/other" });
+		recovery.listUploadRecoveries.mockResolvedValueOnce([first, second]);
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		api.resumeResumableUpload.mockImplementation((_file, _session, _progress, onConfirmedOffset) => ({
+			promise: (async () => {
+				await onConfirmedOffset?.(3);
+				await uploadGate.promise;
+			})(),
+			abort: vi.fn(),
+		}));
+		api.completePersistentUpload.mockResolvedValue(savedFile);
+		const container = await renderLibrary();
+		await act(async () => { await Promise.resolve(); });
+		const inputs = Array.from(container.querySelectorAll<HTMLInputElement>(".upload-recovery-item input"));
+		Object.defineProperty(inputs[0], "files", { configurable: true, value: [new File(["hello"], "same.txt", { type: "text/plain", lastModified: 100 })] });
+		act(() => inputs[0].dispatchEvent(new Event("change", { bubbles: true })));
+		await vi.waitFor(() => expect(api.resumeResumableUpload).toHaveBeenCalledTimes(1));
+
+		const remainingInput = container.querySelector<HTMLInputElement>(".upload-recovery-item input")!;
+		expect(remainingInput.disabled).toBe(true);
+		const mainInput = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		expect(mainInput.disabled).toBe(true);
+		Object.defineProperty(remainingInput, "files", { configurable: true, value: [new File(["hello"], "other.txt", { type: "text/plain", lastModified: 100 })] });
+		remainingInput.dispatchEvent(new Event("change", { bubbles: true }));
+		Object.defineProperty(mainInput, "files", { configurable: true, value: [new File(["new"], "new.txt")] });
+		mainInput.dispatchEvent(new Event("change", { bubbles: true }));
+		expect(api.resumeResumableUpload).toHaveBeenCalledTimes(1);
+		expect(api.createPersistentUpload).not.toHaveBeenCalled();
+
+		uploadGate.resolve();
+		await vi.waitFor(() => expect(container.textContent).toContain("Complete"));
+	});
+
+	it("pauses a resumed upload and keeps its confirmed progress", async () => {
+		const uploadGate = deferred<void>();
+		const abort = vi.fn(() => uploadGate.reject(new DOMException("Paused", "AbortError")));
+		recovery.listUploadRecoveries.mockResolvedValueOnce([recoveryRecord()]);
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		api.resumeResumableUpload.mockImplementation((_file, _session, _progress, onConfirmedOffset) => ({
+			promise: (async () => {
+				await onConfirmedOffset?.(3);
+				await uploadGate.promise;
+			})(),
+			abort,
+		}));
+		const container = await renderLibrary();
+		await act(async () => { await Promise.resolve(); });
+		const input = container.querySelector<HTMLInputElement>(".upload-recovery-item input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [new File(["hello"], "same.txt", { type: "text/plain", lastModified: 100 })] });
+		act(() => input.dispatchEvent(new Event("change", { bubbles: true })));
+		await vi.waitFor(() => expect(container.textContent).toContain("Uploading · 3 B of 5 B · 60%"));
+
+		const pause = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Pause")!;
+		act(() => pause.click());
+
+		await vi.waitFor(() => expect(container.textContent).toContain("Paused · 3 B of 5 B · 60%"));
+		expect(abort).toHaveBeenCalledTimes(1);
+		expect(container.textContent).toContain("Resume");
+	});
+
+	it("shows preparing, uploading, finalizing, complete, and failed states", async () => {
+		const createGate = deferred<Awaited<ReturnType<typeof api.createPersistentUpload>>>();
+		const uploadGate = deferred<void>();
+		const completionGate = deferred<FileRecord>();
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		api.createPersistentUpload.mockReturnValue(createGate.promise);
+		api.uploadResumable.mockReturnValue({ promise: uploadGate.promise, abort: vi.fn() });
+		api.completePersistentUpload.mockReturnValue(completionGate.promise);
+		const container = await renderLibrary();
+		const input = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		const file = new File(["hello"], "states.txt", { type: "text/plain" });
+		Object.defineProperty(input, "files", { configurable: true, value: [file] });
+		act(() => input.dispatchEvent(new Event("change", { bubbles: true })));
+		await vi.waitFor(() => expect(container.textContent).toContain("Preparing…"));
+
+		createGate.resolve({
+			file: { ...savedFile, id: "states", originalName: file.name, status: "PENDING" },
+			uploadTarget: { url: "https://upload.invalid/start", method: "POST", headers: {}, expiresAt: "soon" },
+		});
+		await vi.waitFor(() => expect(container.textContent).toContain("Uploading · 0 B of 5 B · 0%"));
+		uploadGate.resolve();
+		await vi.waitFor(() => expect(container.textContent).toContain("Finalizing upload…"));
+		completionGate.resolve(savedFile);
+		await vi.waitFor(() => expect(container.textContent).toContain("Complete"));
+
+		api.createPersistentUpload.mockResolvedValue({
+			file: { ...savedFile, id: "failed", originalName: "failed.txt", status: "PENDING" },
+			uploadTarget: { url: "https://upload.invalid/fail", method: "POST", headers: {}, expiresAt: "soon" },
+		});
+		api.uploadResumable.mockReturnValue({ promise: Promise.reject(new Error("network down")), abort: vi.fn() });
+		const refreshedInput = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		Object.defineProperty(refreshedInput, "files", { configurable: true, value: [new File(["bad"], "failed.txt")] });
+		act(() => refreshedInput.dispatchEvent(new Event("change", { bubbles: true })));
+		await vi.waitFor(() => expect(container.textContent).toContain("Failed · failed.txt could not be uploaded."));
+	});
+
 	it("preserves completion-only recovery after failure and allows explicit discard", async () => {
 		recovery.listUploadRecoveries.mockResolvedValueOnce([{
 			fileId: "pending-1", userId: "user-1", sessionUrl: "https://upload.invalid/private",
@@ -250,11 +477,11 @@ describe("PersistentFileLibrary", () => {
 		const retry = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Retry completion")!;
 		await act(async () => { retry.click(); });
 		expect(recovery.deleteUploadRecovery).not.toHaveBeenCalled();
-		expect(container.textContent).toContain("Upload stored · completion pending");
-		const discard = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Discard local recovery")!;
+		expect(container.textContent).toContain("Failed · The upload is stored, but Eterealink could not finish it yet. Retry completion.");
+		const discard = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Forget recovery on this browser")!;
 		await act(async () => { discard.click(); });
 		expect(recovery.deleteUploadRecovery).toHaveBeenCalledWith("pending-1");
-		expect(container.textContent).not.toContain("Upload stored · completion pending");
+		expect(Array.from(container.querySelectorAll("button")).some((button) => button.textContent === "Retry completion")).toBe(false);
 	});
 
   it("accepts files dropped onto the persistent library", async () => {

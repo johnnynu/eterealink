@@ -67,11 +67,61 @@ type OpenLocationOptions = {
 };
 type UploadQueueItem = {
 	id: string;
-	file: File;
+	file?: File;
+	fileId?: string;
+	fileName: string;
+	fileSize: number;
+	confirmedBytes: number;
 	progress: number;
-	status: "queued" | "uploading" | "complete" | "failed" | "canceled";
+	status: "preparing" | "uploading" | "paused" | "checking" | "finalizing" | "complete" | "failed";
+	recoverable?: boolean;
+	completionPending?: boolean;
+	startedAt?: number;
+	startingBytes?: number;
+	speedBytesPerSecond?: number;
 	error?: string;
 };
+
+function currentUploadTime() {
+	return Date.now();
+}
+
+function applyUploadProgress(item: UploadQueueItem, confirmedBytes: number): UploadQueueItem {
+	const boundedBytes = Math.min(item.fileSize, Math.max(0, confirmedBytes));
+	const startedAt = item.startedAt ?? currentUploadTime();
+	const startingBytes = item.startingBytes ?? 0;
+	const elapsedSeconds = (currentUploadTime() - startedAt) / 1000;
+	const transferredBytes = Math.max(0, boundedBytes - startingBytes);
+	return {
+		...item,
+		confirmedBytes: boundedBytes,
+		progress: item.fileSize > 0 ? Math.round((boundedBytes / item.fileSize) * 100) : 0,
+		speedBytesPerSecond: elapsedSeconds >= 1 && transferredBytes > 0 ? transferredBytes / elapsedSeconds : item.speedBytesPerSecond,
+	};
+}
+
+function formatRemaining(seconds: number) {
+	if (seconds < 60) return `about ${Math.max(1, Math.ceil(seconds))} sec remaining`;
+	if (seconds < 3600) return `about ${Math.ceil(seconds / 60)} min remaining`;
+	return `about ${Math.ceil(seconds / 3600)} hr remaining`;
+}
+
+function uploadStatus(item: UploadQueueItem) {
+	if (item.status === "preparing") return "Preparing…";
+	if (item.status === "checking") return "Checking server progress…";
+	if (item.status === "finalizing") return "Finalizing upload…";
+	if (item.status === "complete") return "Complete";
+	if (item.status === "failed") return `Failed${item.error ? ` · ${item.error}` : ""}`;
+	if (item.status === "paused") return item.file
+		? `Paused · ${formatBytes(item.confirmedBytes)} of ${formatBytes(item.fileSize)} · ${item.progress}%`
+		: `Upload paused at ${formatBytes(item.confirmedBytes)} of ${formatBytes(item.fileSize)} — select the original file to continue.`;
+	const details = [`${formatBytes(item.confirmedBytes)} of ${formatBytes(item.fileSize)}`, `${item.progress}%`];
+	if (item.speedBytesPerSecond && item.confirmedBytes < item.fileSize) {
+		details.push(`${formatBytes(Math.round(item.speedBytesPerSecond))}/s`);
+		details.push(formatRemaining((item.fileSize - item.confirmedBytes) / item.speedBytesPerSecond));
+	}
+	return `Uploading · ${details.join(" · ")}`;
+}
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof APIError ? error.message : fallback;
@@ -161,9 +211,10 @@ export function PersistentFileLibrary() {
 	const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
 	const [recoveries, setRecoveries] = useState<UploadRecoveryRecord[]>([]);
 	const [recoveringID, setRecoveringID] = useState("");
-	const [recoveryProgress, setRecoveryProgress] = useState<Record<string, number>>({});
 	const [folderUpdateToast, setFolderUpdateToast] = useState(0);
 	const activeUpload = useRef<{ id: string; abort: () => void } | null>(null);
+	const uploadOperation = useRef<"upload" | string | null>(null);
+	const pendingPauseIDs = useRef(new Set<string>());
 	const uploadSequence = useRef(0);
 	const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const openLocationRef = useRef<((folderID?: string, nextScope?: LibraryScope, cursor?: string, overrides?: OpenLocationOptions, resetCursor?: boolean) => Promise<void>) | null>(null);
@@ -200,7 +251,9 @@ export function PersistentFileLibrary() {
 	displayedFolderSnapshot.current = folderSnapshot(currentFolder, breadcrumbs, folders, files, summary, totalCount, nextCursor);
 	displayedAccessSnapshot.current = folderAccessSnapshot(members, folderInvites);
 	const canUpload = scope === "owned" || (scope === "shared" && currentFolder?.role === "CONTRIBUTOR");
-	const visibleRecoveries = recoveries.filter((record) => record.userId === user?.id);
+	const uploadBusy = uploading || Boolean(recoveringID);
+	const visibleRecoveries = recoveries.filter((record) => record.userId === user?.id
+		&& !uploadQueue.some((item) => item.fileId === record.fileId));
 
 	useEffect(() => {
 		let active = true;
@@ -724,7 +777,7 @@ export function PersistentFileLibrary() {
 	}
 
   async function uploadSelectedFiles(selected: File[]) {
-	if (!canUpload || selected.length === 0 || uploading) return;
+	if (!canUpload || selected.length === 0 || uploadOperation.current) return;
 	const uploadUserID = user?.id;
 	if (!uploadUserID) {
 		setError("A signed-in session is required to upload files.");
@@ -747,15 +800,18 @@ export function PersistentFileLibrary() {
 			return;
 		}
 	}
-
+	uploadOperation.current = "upload";
     setUploading(true);
     setUploadProgress(0);
     setError("");
 	const queue = selected.map((file) => ({
 		id: `upload-${uploadSequence.current += 1}`,
 		file,
+		fileName: file.name,
+		fileSize: file.size,
+		confirmedBytes: 0,
 		progress: 0,
-		status: "queued" as const,
+		status: "preparing" as const,
 	}));
 	setUploadQueue(queue);
     const completed: FileRecord[] = [];
@@ -769,13 +825,20 @@ export function PersistentFileLibrary() {
 		let recovery: UploadRecoveryRecord | null = null;
 		let recoveryPersisted = false;
         setActiveFile(file.name);
-		setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, status: "uploading", error: undefined } : queued));
+		setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, status: "preparing", error: undefined } : queued));
 		try {
 			const created = await createPersistentUpload(file, token, currentFolder?.folder.id);
 			pendingID = created.file.id;
+			const startedAt = currentUploadTime();
+			setUploadQueue((current) => current.map((queued) => queued.id === item.id ? {
+				...queued,
+				fileId: created.file.id,
+				status: "uploading",
+				startedAt,
+				startingBytes: 0,
+			} : queued));
 			const upload = uploadResumable(file, created.uploadTarget, (filePercent) => {
 				setUploadProgress(Math.round(((index + filePercent / 100) / queue.length) * 100));
-				setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, progress: filePercent } : queued));
 			}, {
 				onSession: async (sessionUrl) => {
 					const timestamp = Date.now();
@@ -794,15 +857,27 @@ export function PersistentFileLibrary() {
 						updatedAt: timestamp,
 					};
 					recoveryPersisted = await saveUploadRecovery(recovery);
-					if (recoveryPersisted) setRecoveries((current) => [recovery!, ...current.filter((entry) => entry.fileId !== recovery!.fileId)]);
+					if (recoveryPersisted) {
+						setRecoveries((current) => [recovery!, ...current.filter((entry) => entry.fileId !== recovery!.fileId)]);
+						setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, recoverable: true } : queued));
+					}
 				},
 				onConfirmedOffset: async (confirmedOffset) => {
-					if (!recovery || !recoveryPersisted) return;
-					recovery = await updateUploadRecovery(recovery, { confirmedOffset });
+					setUploadQueue((current) => current.map((queued) => queued.id === item.id ? applyUploadProgress(queued, confirmedOffset) : queued));
+					if (recovery && recoveryPersisted) {
+						recovery = await updateUploadRecovery(recovery, { confirmedOffset });
+						setRecoveries((current) => current.map((entry) => entry.fileId === recovery!.fileId ? recovery! : entry));
+					}
 				},
 			});
 			activeUpload.current = { id: item.id, abort: upload.abort };
+			if (pendingPauseIDs.current.delete(item.id)) upload.abort();
 			await upload.promise;
+			setUploadQueue((current) => current.map((queued) => queued.id === item.id ? {
+				...applyUploadProgress(queued, file.size),
+				status: "finalizing",
+				completionPending: true,
+			} : queued));
 			if (recovery && recoveryPersisted) {
 				recovery = await updateUploadRecovery(recovery, { confirmedOffset: file.size, completionPending: true });
 				setRecoveries((current) => current.map((entry) => entry.fileId === recovery!.fileId ? recovery! : entry));
@@ -813,16 +888,23 @@ export function PersistentFileLibrary() {
 				setRecoveries((current) => current.filter((entry) => entry.fileId !== created.file.id));
 			}
 			pendingID = "";
-			setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, progress: 100, status: "complete" } : queued));
+			setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...applyUploadProgress(queued, file.size), status: "complete", completionPending: false } : queued));
 		} catch (uploadError) {
 			const message = errorMessage(uploadError, `${file.name} could not be uploaded.`);
-			const canceled = uploadError instanceof APIError && uploadError.code === "canceled";
+			const canceled = (uploadError instanceof APIError && uploadError.code === "canceled")
+				|| (uploadError instanceof DOMException && uploadError.name === "AbortError");
 			if (!canceled) failures.push(message);
-			setUploadQueue((current) => current.map((queued) => queued.id === item.id ? { ...queued, status: canceled ? "canceled" : "failed", error: canceled ? undefined : message } : queued));
+			setUploadQueue((current) => current.map((queued) => queued.id === item.id ? {
+				...queued,
+				status: canceled && recoveryPersisted ? "paused" : "failed",
+				error: canceled ? undefined : message,
+				recoverable: recoveryPersisted,
+			} : queued));
 			if (pendingID && !recoveryPersisted) {
 				try { await deletePersistentFile(pendingID, token); } catch { /* hidden pending metadata is cleaned up later */ }
 			}
 		} finally {
+			pendingPauseIDs.current.delete(item.id);
 			activeUpload.current = null;
 		}
       }
@@ -831,45 +913,91 @@ export function PersistentFileLibrary() {
 		if (failures.length > 0) setError(`${failures.length} ${failures.length === 1 ? "file" : "files"} could not be uploaded. Retry from the queue below.`);
 	} catch (uploadError) {
 		setError(errorMessage(uploadError, "Your uploads could not be started. Please try again."));
-    } finally {
+	} finally {
 	  activeUpload.current = null;
+	  uploadOperation.current = null;
       setUploading(false);
       setActiveFile("");
     }
   }
 
 	async function finishRecoveredUpload(record: UploadRecoveryRecord, file?: File) {
-		if (!user || record.userId !== user.id || recoveringID) return;
+		if (!user || record.userId !== user.id || uploadOperation.current) return;
 		if (!record.completionPending && (!file || !matchesRecoveryFile(record, file))) {
 			setError("Choose the same file: its name, size, modified date, and type must match the interrupted upload.");
 			return;
 		}
+		uploadOperation.current = record.fileId;
 		setRecoveringID(record.fileId);
 		setError("");
 		let current = record;
+		const existing = uploadQueue.find((item) => item.fileId === record.fileId);
+		const queueItemID = existing?.id ?? `recovery-${record.fileId}`;
+		const recoveryQueueItem: UploadQueueItem = {
+			id: queueItemID,
+			file,
+			fileId: record.fileId,
+			fileName: record.fileName,
+			fileSize: record.fileSize,
+			confirmedBytes: record.confirmedOffset,
+			progress: record.fileSize > 0 ? Math.round((record.confirmedOffset / record.fileSize) * 100) : 0,
+			status: record.completionPending ? "finalizing" : "checking",
+			recoverable: true,
+			completionPending: record.completionPending,
+			startedAt: currentUploadTime(),
+			startingBytes: record.confirmedOffset,
+		};
+		setUploadQueue((items) => existing
+			? items.map((item) => item.id === queueItemID ? { ...recoveryQueueItem, file: file ?? item.file } : item)
+			: [...items, recoveryQueueItem]);
 		try {
 			const token = await getIDToken();
 			if (!record.completionPending && file) {
-				const upload = resumeResumableUpload(file, record.sessionUrl, (percent) => {
-					setRecoveryProgress((progress) => ({ ...progress, [record.fileId]: percent }));
-				}, async (confirmedOffset) => {
+				const upload = resumeResumableUpload(file, record.sessionUrl, () => {}, async (confirmedOffset) => {
 					current = await updateUploadRecovery(current, { confirmedOffset });
+					setRecoveries((items) => items.map((item) => item.fileId === current.fileId ? current : item));
+					setUploadQueue((items) => items.map((item) => item.id === queueItemID ? {
+						...applyUploadProgress(item, confirmedOffset),
+						status: "uploading",
+					} : item));
 				});
-				activeUpload.current = { id: record.fileId, abort: upload.abort };
+				activeUpload.current = { id: queueItemID, abort: upload.abort };
+				if (pendingPauseIDs.current.delete(queueItemID)) upload.abort();
 				await upload.promise;
+				setUploadQueue((items) => items.map((item) => item.id === queueItemID ? {
+					...applyUploadProgress(item, file.size),
+					status: "finalizing",
+					completionPending: true,
+				} : item));
 				current = await updateUploadRecovery(current, { confirmedOffset: file.size, completionPending: true });
 				setRecoveries((items) => items.map((item) => item.fileId === current.fileId ? current : item));
 			}
 			await completePersistentUpload(record.fileId, token);
 			await deleteUploadRecovery(record.fileId);
 			setRecoveries((items) => items.filter((item) => item.fileId !== record.fileId));
+			setUploadQueue((items) => items.map((item) => item.id === queueItemID ? {
+				...applyUploadProgress(item, record.fileSize),
+				status: "complete",
+				completionPending: false,
+			} : item));
 			await openLocation(currentFolder?.folder.id, scope);
 		} catch (recoveryError) {
-			setError(errorMessage(recoveryError, current.completionPending
+			const message = errorMessage(recoveryError, current.completionPending
 				? "The upload is stored, but Eterealink could not finish it yet. Retry completion."
-				: "The interrupted upload could not be resumed. Please try again."));
+				: "The interrupted upload could not be resumed. Please try again.");
+			const canceled = (recoveryError instanceof APIError && recoveryError.code === "canceled")
+				|| (recoveryError instanceof DOMException && recoveryError.name === "AbortError");
+			setUploadQueue((items) => items.map((item) => item.id === queueItemID ? {
+				...item,
+				status: canceled ? "paused" : "failed",
+				error: canceled ? undefined : message,
+				completionPending: current.completionPending,
+			} : item));
+			if (!canceled) setError(message);
 		} finally {
+			pendingPauseIDs.current.delete(queueItemID);
 			activeUpload.current = null;
+			uploadOperation.current = null;
 			setRecoveringID("");
 		}
 	}
@@ -877,10 +1005,21 @@ export function PersistentFileLibrary() {
 	async function discardRecovery(record: UploadRecoveryRecord) {
 		await deleteUploadRecovery(record.fileId);
 		setRecoveries((items) => items.filter((item) => item.fileId !== record.fileId));
+		setUploadQueue((items) => items.flatMap((item) => {
+			if (item.fileId !== record.fileId) return [item];
+			return item.file ? [{ ...item, recoverable: false, completionPending: false }] : [];
+		}));
 	}
 
 	function cancelActiveUpload(itemID: string) {
 		if (activeUpload.current?.id === itemID) activeUpload.current.abort();
+		else pendingPauseIDs.current.add(itemID);
+	}
+
+	function resumeQueueItem(item: UploadQueueItem) {
+		const record = recoveries.find((entry) => entry.fileId === item.fileId);
+		if (record) void finishRecoveredUpload(record, item.file);
+		else if (item.file) void uploadSelectedFiles([item.file]);
 	}
 
   async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -1060,7 +1199,7 @@ export function PersistentFileLibrary() {
       className={`library-content ${dragging ? "is-dragging" : ""}`}
 			onDragEnter={(event) => {
         event.preventDefault();
-		if (canUpload && !uploading && event.dataTransfer.types.includes("Files")) setDragging(true);
+		if (canUpload && !uploadBusy && event.dataTransfer.types.includes("Files")) setDragging(true);
       }}
       onDragOver={(event) => event.preventDefault()}
       onDragLeave={(event) => {
@@ -1113,15 +1252,15 @@ export function PersistentFileLibrary() {
 			</div>
 		  ) : null}
         </div>
-		{canUpload && <label className={`primary-button library-upload-button ${uploading ? "is-disabled" : ""}`} htmlFor="owned-files-input">
-          <UploadIcon /> {uploading ? "Uploading…" : "Upload files"}
+		{canUpload && <label className={`primary-button library-upload-button ${uploadBusy ? "is-disabled" : ""}`} htmlFor="owned-files-input">
+		  <UploadIcon /> {recoveringID ? "Resuming…" : uploading ? "Uploading…" : "Upload files"}
 		</label>}
         <input
           id="owned-files-input"
           className="visually-hidden"
           type="file"
           multiple
-          disabled={uploading}
+          disabled={uploadBusy}
           onChange={uploadFiles}
         />
       </div>
@@ -1137,39 +1276,54 @@ export function PersistentFileLibrary() {
 		<div className="persistent-upload-queue" aria-label="Persistent upload queue">
 			{uploadQueue.map((item) => (
 				<div className={`upload-queue-item ${item.status}`} key={item.id}>
-					<span><strong>{item.file.name}</strong><small>{item.status === "failed" ? item.error : item.status}</small></span>
+					<span><strong>{item.fileName}</strong><small>{uploadStatus(item)}</small></span>
 					<div className="queue-progress"><span style={{ width: `${item.progress}%` }} /></div>
-					{item.status === "uploading" && <button type="button" onClick={() => cancelActiveUpload(item.id)}>Cancel</button>}
-					{(item.status === "failed" || item.status === "canceled") && <button type="button" disabled={uploading} onClick={() => uploadSelectedFiles([item.file])}>Retry</button>}
+					{(item.status === "uploading" || item.status === "checking") && (
+						<button type="button" onClick={() => cancelActiveUpload(item.id)}>{item.recoverable ? "Pause" : "Cancel"}</button>
+					)}
+					{(item.status === "paused" || item.status === "failed") && (
+						<div className="upload-queue-actions">
+							<button type="button" disabled={uploadBusy} onClick={() => resumeQueueItem(item)}>
+								{item.completionPending ? "Retry completion" : item.recoverable ? "Resume" : "Retry"}
+							</button>
+							{item.fileId && recoveries.some((record) => record.fileId === item.fileId) && (
+								<button type="button" disabled={uploadBusy} onClick={() => {
+									const record = recoveries.find((entry) => entry.fileId === item.fileId);
+									if (record) void discardRecovery(record);
+								}}>Forget recovery on this browser</button>
+							)}
+						</div>
+					)}
 				</div>
 			))}
 			{!uploading && uploadQueue.every((item) => item.status === "complete") && <button type="button" className="clear-upload-queue" onClick={() => setUploadQueue([])}>Clear completed</button>}
 		</div>
 	  )}
 	  {visibleRecoveries.length > 0 && (
-		<section className="upload-recoveries" aria-label="Interrupted uploads">
-			<h3>Interrupted uploads</h3>
-			<p>Reselect the same local file to continue. Session details stay private in this browser.</p>
+		<section className="upload-recoveries" aria-label="Uploads to resume">
+			<h3>Uploads to resume</h3>
+			<p>Recovery details stay private in this browser.</p>
 			{visibleRecoveries.map((record) => (
 				<div className="upload-recovery-item" key={record.fileId}>
-					<span><strong>{record.fileName}</strong><small>{record.completionPending ? "Upload stored · completion pending" : `${formatBytes(record.confirmedOffset)} of ${formatBytes(record.fileSize)} confirmed`}</small></span>
-					{recoveryProgress[record.fileId] !== undefined && <span>{recoveryProgress[record.fileId]}%</span>}
+					<span><strong>{record.fileName}</strong><small>{record.completionPending
+						? "Upload transferred · finalization paused."
+						: `Upload paused at ${formatBytes(record.confirmedOffset)} of ${formatBytes(record.fileSize)} — select the original file to continue.`}</small></span>
 					{record.completionPending ? (
-						<button type="button" disabled={Boolean(recoveringID)} onClick={() => void finishRecoveredUpload(record)}>Retry completion</button>
+						<button type="button" disabled={uploadBusy} onClick={() => void finishRecoveredUpload(record)}>Retry completion</button>
 					) : (
-						<label className="secondary-button">
+						<label className={`secondary-button ${uploadBusy ? "is-disabled" : ""}`}>
 							Reselect file
-							<input className="visually-hidden" type="file" disabled={Boolean(recoveringID)} onChange={(event) => {
+							<input className="visually-hidden" type="file" disabled={uploadBusy} onChange={(event) => {
 								const file = event.target.files?.[0];
 								event.target.value = "";
 								if (file) void finishRecoveredUpload(record, file);
 							}} />
 						</label>
 					)}
-					<button type="button" disabled={recoveringID === record.fileId} onClick={() => void discardRecovery(record)}>Discard local recovery</button>
+					<button type="button" disabled={uploadBusy} onClick={() => void discardRecovery(record)}>Forget recovery on this browser</button>
 				</div>
 			))}
-			<small>Discarding removes only this browser’s recovery record; it does not delete pending server metadata.</small>
+			<small>Forgetting recovery only removes this browser’s recovery data. It does not pause or cancel an active upload, and it does not delete pending server metadata.</small>
 		</section>
 	  )}
       {error && <p className="error-message library-error" role="alert">{error}</p>}

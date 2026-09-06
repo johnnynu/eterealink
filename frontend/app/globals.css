@@ -336,6 +336,8 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 .queue-progress { height: 5px; overflow: hidden; border-radius: 999px; background: rgba(23, 33, 29, .08); }
 .queue-progress span { display: block; height: 100%; border-radius: inherit; background: var(--green); }
 .upload-queue-item button, .clear-upload-queue { cursor: pointer; border: 0; border-radius: 7px; padding: 6px 9px; color: var(--green); background: rgba(205, 232, 216, .4); font: 750 11px var(--font-body); }
+.upload-queue-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.upload-queue-item button:disabled, .upload-recovery-item button:disabled, .upload-recoveries .secondary-button.is-disabled { cursor: wait; opacity: .5; pointer-events: none; }
 .clear-upload-queue { justify-self: end; }
 .library-error { margin: 22px 0 0; }
 .storage-capacity-summary { display: grid; gap: 5px; margin-top: 7px; }
