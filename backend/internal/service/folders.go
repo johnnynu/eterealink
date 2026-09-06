@@ -205,9 +205,6 @@ func (s *Folders) Contents(ctx context.Context, userID, folderID string, input L
 		return domain.FolderContents{}, err
 	}
 	result, hasMore, err := s.store.GetFolderContents(ctx, strings.TrimSpace(userID), strings.TrimSpace(folderID), s.now().UTC(), query)
-	if err == nil && result.Current != nil && result.Current.Role == domain.FolderRoleOwner {
-		result.Summary.QuotaBytes = s.maxAccountBytes
-	}
 	result.NextCursor = nextLibraryCursor(query, result, hasMore)
 	return result, err
 }

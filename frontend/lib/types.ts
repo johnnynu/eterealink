@@ -117,6 +117,7 @@ export type FolderContents = {
 	folders: FolderAccess[];
 	files: OwnedFileRecord[];
 	summary: FileLibrarySummary;
+	totalCount: number;
 	nextCursor?: string;
 };
 

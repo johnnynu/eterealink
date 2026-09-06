@@ -574,6 +574,10 @@ func (p *Postgres) GetRootContents(ctx context.Context, userID, scope string, no
 		return result, false, err
 	}
 	result.Files = files
+	_, result.TotalCount, err = p.getFolderFileStats(ctx, userID, nil, now, query)
+	if err != nil {
+		return result, false, err
+	}
 	result.Summary, err = p.GetOwnedFileUsage(ctx, userID)
 	return result, hasMore, err
 }
@@ -664,13 +668,9 @@ func (p *Postgres) GetFolderContents(ctx context.Context, userID, folderID strin
 	if err != nil {
 		return result, false, err
 	}
-	if role == domain.FolderRoleOwner {
-		result.Summary, err = p.GetOwnedFileUsage(ctx, owner.ID)
-		return result, hasMore, err
-	}
-	for _, file := range result.Files {
-		result.Summary.FileCount++
-		result.Summary.TotalBytes += file.File.SizeBytes
+	result.Summary, result.TotalCount, err = p.getFolderFileStats(ctx, owner.ID, &folderID, now, query)
+	if err != nil {
+		return result, false, err
 	}
 	return result, hasMore, nil
 }
@@ -766,6 +766,31 @@ func (p *Postgres) listFolderFiles(ctx context.Context, ownerID string, folderID
 		result = result[:query.Limit]
 	}
 	return result, hasMore, nil
+}
+
+func (p *Postgres) getFolderFileStats(ctx context.Context, ownerID string, folderID *string, now time.Time, query domain.FileLibraryQuery) (domain.FileLibrarySummary, int64, error) {
+	var summary domain.FileLibrarySummary
+	var totalCount int64
+	err := p.pool.QueryRow(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(f.size_bytes), 0),
+		       COUNT(*) FILTER (WHERE
+		         (@search = '' OR f.original_name ILIKE '%' || @search || '%')
+		         AND (NOT @shared_only OR EXISTS (
+		           SELECT 1 FROM share_links s
+		           WHERE s.file_id = f.id AND s.revoked_at IS NULL
+		             AND (s.expires_at IS NULL OR s.expires_at > @now)
+		         )))
+		FROM files f
+		WHERE f.folder_id IS NOT DISTINCT FROM @folder_id
+		  AND f.upload_status = 'READY'
+		  AND (@folder_id::uuid IS NOT NULL OR f.owner_id = @owner_id)`, pgx.NamedArgs{
+		"owner_id": ownerID, "folder_id": folderID, "now": now,
+		"search": query.Search, "shared_only": query.SharedOnly,
+	}).Scan(&summary.FileCount, &summary.TotalBytes, &totalCount)
+	if err != nil {
+		return domain.FileLibrarySummary{}, 0, fmt.Errorf("get folder file stats: %w", err)
+	}
+	return summary, totalCount, nil
 }
 
 func (p *Postgres) UpdateFolder(ctx context.Context, ownerID, folderID, name string, parentFolderID *string) (domain.Folder, error) {

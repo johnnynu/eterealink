@@ -166,6 +166,7 @@ type FolderContents struct {
 	Folders     []FolderAccess     `json:"folders"`
 	Files       []OwnedFile        `json:"files"`
 	Summary     FileLibrarySummary `json:"summary"`
+	TotalCount  int64              `json:"totalCount"`
 	NextCursor  string             `json:"nextCursor,omitempty"`
 }
 

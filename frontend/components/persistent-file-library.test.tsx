@@ -54,6 +54,7 @@ function library(files: Array<{ file: FileRecord; uploaderName?: string; share?:
     files,
 	folders: [],
 	breadcrumbs: [],
+	totalCount: files.length,
     summary: {
       fileCount: files.length,
       totalBytes: files.reduce((total, entry) => total + entry.file.sizeBytes, 0),
@@ -183,13 +184,14 @@ describe("PersistentFileLibrary", () => {
 		file: { ...savedFile, id: `file-${index + 1}`, originalName: `file-${index + 1}.txt` },
 	}));
 	api.listFolderContents
-		.mockResolvedValueOnce({ ...library(entries.slice(0, 10)), nextCursor: "cursor-2" })
-		.mockResolvedValueOnce({ ...library(entries.slice(10, 20)), nextCursor: "cursor-3" })
-		.mockResolvedValueOnce(library(entries.slice(20)));
+		.mockResolvedValueOnce({ ...library(entries), files: entries.slice(0, 10), nextCursor: "cursor-2" })
+		.mockResolvedValueOnce({ ...library(entries), files: entries.slice(10, 20), nextCursor: "cursor-3" })
+		.mockResolvedValueOnce({ ...library(entries), files: entries.slice(20) });
     const container = await renderLibrary();
 
     expect(container.querySelectorAll(".owned-file-row")).toHaveLength(10);
-	expect(container.textContent).toContain("1–10");
+	expect(container.textContent).toContain("1–10 of 21");
+	expect(container.textContent).toContain("Page 1 of 3");
     expect(container.textContent).toContain("file-1.txt");
     expect(container.textContent).not.toContain("file-11.txt");
 
@@ -197,7 +199,8 @@ describe("PersistentFileLibrary", () => {
 	await act(async () => { nextButton?.click(); });
 
     expect(container.querySelectorAll(".owned-file-row")).toHaveLength(10);
-	expect(container.textContent).toContain("11–20");
+	expect(container.textContent).toContain("11–20 of 21");
+	expect(container.textContent).toContain("Page 2 of 3");
     expect(container.textContent).toContain("file-11.txt");
     expect(container.textContent).not.toContain("file-1.txt");
 
@@ -205,8 +208,8 @@ describe("PersistentFileLibrary", () => {
 	await act(async () => { updatedNextButton?.click(); });
 
     expect(container.querySelectorAll(".owned-file-row")).toHaveLength(1);
-	expect(container.textContent).toContain("21–21");
-	expect(container.textContent).toContain("Page 3");
+	expect(container.textContent).toContain("21–21 of 21");
+	expect(container.textContent).toContain("Page 3 of 3");
   });
 
   it("creates, copies, and revokes a persistent file share link", async () => {

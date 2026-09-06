@@ -90,6 +90,9 @@ func TestPostgresFolderOwnershipInvitesAndContributorAccess(t *testing.T) {
 	if err != nil || !hasMore || len(firstPage.Files) != 1 || firstPage.Files[0].File.ID != file.ID {
 		t.Fatalf("first cursor page = %#v, more = %t, error = %v", firstPage.Files, hasMore, err)
 	}
+	if firstPage.Summary.FileCount != 2 || firstPage.Summary.TotalBytes != 9 || firstPage.TotalCount != 2 {
+		t.Fatalf("first page totals = summary %#v, total count = %d", firstPage.Summary, firstPage.TotalCount)
+	}
 	secondPage, hasMore, err := database.GetFolderContents(ctx, owner.ID, child.ID, now, domain.FileLibraryQuery{
 		Sort: "newest", Limit: 1, CursorID: file.ID, CursorTime: file.CreatedAt,
 	})
@@ -103,6 +106,9 @@ func TestPostgresFolderOwnershipInvitesAndContributorAccess(t *testing.T) {
 	searched, _, err := database.GetFolderContents(ctx, owner.ID, child.ID, now, domain.FileLibraryQuery{Sort: "newest", Search: "ARCHIVE", Limit: 10})
 	if err != nil || len(searched.Files) != 1 || searched.Files[0].File.ID != olderFile.ID {
 		t.Fatalf("searched files = %#v, error = %v", searched.Files, err)
+	}
+	if searched.Summary.FileCount != 2 || searched.Summary.TotalBytes != 9 || searched.TotalCount != 1 {
+		t.Fatalf("searched totals = summary %#v, total count = %d", searched.Summary, searched.TotalCount)
 	}
 	if _, err := database.GetAccessibleFile(ctx, viewer.ID, file.ID); err != nil {
 		t.Fatalf("viewer file access: %v", err)
@@ -193,6 +199,9 @@ func TestPostgresFolderOwnershipInvitesAndContributorAccess(t *testing.T) {
 	ownerContents, _, err := database.GetFolderContents(ctx, owner.ID, child.ID, now.Add(time.Minute), domain.FileLibraryQuery{Sort: "newest", Limit: 10})
 	if err != nil || len(ownerContents.Files) != 3 || ownerContents.Files[0].File.OwnerID == nil || *ownerContents.Files[0].File.OwnerID != viewer.ID || ownerContents.Files[0].UploaderName != viewer.DisplayName {
 		t.Fatalf("mixed-owner contents = %#v, error = %v", ownerContents.Files, err)
+	}
+	if ownerContents.Summary.FileCount != 3 || ownerContents.Summary.TotalBytes != 13 || ownerContents.TotalCount != 3 {
+		t.Fatalf("mixed-owner totals = summary %#v, total count = %d", ownerContents.Summary, ownerContents.TotalCount)
 	}
 	if _, err := database.GetAccessibleFile(ctx, owner.ID, contributedFile.ID); err != nil {
 		t.Fatalf("folder owner accessing contributor file: %v", err)

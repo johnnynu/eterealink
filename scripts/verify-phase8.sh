@@ -64,6 +64,7 @@ for custom_frontend_url in "${custom_frontend_urls[@]}"; do
 	curl --fail --silent --show-error "${custom_frontend_url}/api/readyz"
 	echo
 	curl --fail --silent --show-error "${custom_frontend_url}" | grep -Fq '<title>Eterealink — Share a file simply</title>'
+	curl --fail --silent --show-error "${custom_frontend_url}/icon.svg" | grep -Fq '<svg'
 
 	custom_frontend_hostname="${custom_frontend_url#https://}"
 	if ! printf '%s' "${firebase_config}" | jq --exit-status --arg domain "${custom_frontend_hostname}" \

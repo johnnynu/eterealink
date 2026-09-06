@@ -97,9 +97,10 @@ function folderSnapshot(
 	folders: FolderAccess[],
 	files: OwnedFileRecord[] | null,
 	summary: FileLibrarySummary | null,
+	totalCount: number,
 	nextCursor: string,
 ) {
-	return JSON.stringify({ current, breadcrumbs, folders, files, summary, nextCursor });
+	return JSON.stringify({ current, breadcrumbs, folders, files, summary, totalCount, nextCursor });
 }
 
 function folderAccessSnapshot(members: FolderMember[], invites: FolderInvite[]) {
@@ -110,6 +111,7 @@ export function PersistentFileLibrary() {
   const { getIDToken, user } = useAuth();
   const [files, setFiles] = useState<OwnedFileRecord[] | null>(null);
   const [summary, setSummary] = useState<FileLibrarySummary | null>(null);
+	const [totalCount, setTotalCount] = useState(0);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -184,7 +186,7 @@ export function PersistentFileLibrary() {
 		memberPanelOpen,
 		role: currentFolder?.role,
 	};
-	displayedFolderSnapshot.current = folderSnapshot(currentFolder, breadcrumbs, folders, files, summary, nextCursor);
+	displayedFolderSnapshot.current = folderSnapshot(currentFolder, breadcrumbs, folders, files, summary, totalCount, nextCursor);
 	displayedAccessSnapshot.current = folderAccessSnapshot(members, folderInvites);
 	const canUpload = scope === "owned" || (scope === "shared" && currentFolder?.role === "CONTRIBUTOR");
 
@@ -229,6 +231,7 @@ export function PersistentFileLibrary() {
 			setEditFolderName(result.current?.folder.name ?? "");
 			setScope(initialScope);
 			setNextCursor(result.nextCursor ?? "");
+			setTotalCount(result.totalCount ?? result.files.length);
 			setError(inviteError);
 			if (canonicalizeLocation) writeLibraryLocation(result.current?.folder.id, initialScope, "replace");
           setSummary(result.summary ?? {
@@ -240,6 +243,7 @@ export function PersistentFileLibrary() {
         if (active) {
           setFiles([]);
           setSummary({ fileCount: 0, totalBytes: 0 });
+			setTotalCount(0);
           setError(errorMessage(loadError, "Your files could not be loaded. Please try again."));
         }
       }
@@ -293,6 +297,7 @@ export function PersistentFileLibrary() {
 			setFolders(result.folders ?? []);
 			setFiles(result.files ?? []);
 			setSummary(result.summary ?? { fileCount: 0, totalBytes: 0 });
+			setTotalCount(result.totalCount ?? result.files?.length ?? 0);
 			setNextCursor(result.nextCursor ?? "");
 			setMembers([]);
 			setFolderInvites([]);
@@ -309,6 +314,7 @@ export function PersistentFileLibrary() {
 			if (requestVersion !== locationVersion.current) return;
 			setFiles([]);
 			setFolders([]);
+			setTotalCount(0);
 			setError(errorMessage(loadError, "This folder could not be loaded. Please try again."));
 		}
 	}
@@ -340,6 +346,7 @@ export function PersistentFileLibrary() {
 			const nextFolders = result.folders ?? [];
 			const nextFiles = result.files ?? [];
 			const nextSummary = result.summary ?? { fileCount: 0, totalBytes: 0 };
+			const nextTotalCount = result.totalCount ?? nextFiles.length;
 			const nextPageCursor = result.nextCursor ?? "";
 			let changed = displayedFolderSnapshot.current !== folderSnapshot(
 				nextCurrent,
@@ -347,6 +354,7 @@ export function PersistentFileLibrary() {
 				nextFolders,
 				nextFiles,
 				nextSummary,
+				nextTotalCount,
 				nextPageCursor,
 			);
 			setScope(view.scope);
@@ -355,6 +363,7 @@ export function PersistentFileLibrary() {
 			setFolders(nextFolders);
 			setFiles(nextFiles);
 			setSummary(nextSummary);
+			setTotalCount(nextTotalCount);
 			setNextCursor(nextPageCursor);
 			const visibleIDs = new Set(nextFiles.map((entry) => entry.file.id));
 			setSelectedIDs((current) => current.filter((id) => visibleIDs.has(id)));
@@ -899,6 +908,7 @@ export function PersistentFileLibrary() {
 	scope === "shared" || visibleFiles.some((entry) => entry.file.ownerId && entry.file.ownerId !== user?.id)
   ));
   const pageStart = (page - 1) * FILES_PER_PAGE;
+	const totalPages = Math.max(1, Math.ceil(totalCount / FILES_PER_PAGE));
 
   function resetLibraryView() {
     setOpenShareID("");
@@ -1315,17 +1325,17 @@ export function PersistentFileLibrary() {
               )}
             </article>
           )})}
-		  {(page > 1 || nextCursor) && (
+		  {totalCount > FILES_PER_PAGE && (
             <nav className="library-pagination" aria-label="File library pages">
               <span>
-				{pageStart + 1}–{pageStart + visibleFiles.length}
+				{pageStart + 1}–{Math.min(pageStart + visibleFiles.length, totalCount)} of {totalCount}
               </span>
               <div>
 				<button type="button" disabled={page === 1} onClick={goToPreviousPage}>
                   Previous
                 </button>
-				<span>Page {page}</span>
-				<button type="button" disabled={!nextCursor} onClick={goToNextPage}>
+				<span>Page {page} of {totalPages}</span>
+				<button type="button" disabled={!nextCursor || page >= totalPages} onClick={goToNextPage}>
                   Next
                 </button>
               </div>
