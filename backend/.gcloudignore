@@ -1,0 +1,6 @@
+.gcloudignore
+.git
+.env*
+bin
+coverage.out
+**/.DS_Store

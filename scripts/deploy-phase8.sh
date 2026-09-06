@@ -63,9 +63,11 @@ project_number="$(gcloud projects describe "${PROJECT_ID}" --format='value(proje
 api_public_url="${API_PUBLIC_URL:-https://${SERVICE}-${project_number}.${REGION}.run.app}"
 frontend_public_url="${FRONTEND_PUBLIC_URL:-https://${FRONTEND_SERVICE}-${project_number}.${REGION}.run.app}"
 frontend_hostname="${frontend_public_url#https://}"
-image_tag="$(git rev-parse --short=12 HEAD)"
-image_uri="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/api:${image_tag}"
-frontend_image_uri="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/frontend:${image_tag}"
+source_tag="$(git rev-parse --short=12 HEAD)"
+api_image_tag="${API_IMAGE_TAG:-${source_tag}}"
+frontend_image_tag="${FRONTEND_IMAGE_TAG:-${source_tag}}"
+image_uri="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/api:${api_image_tag}"
+frontend_image_uri="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/frontend:${frontend_image_tag}"
 
 if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
 	echo "commit the deployment inputs before publishing an immutable image" >&2

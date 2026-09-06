@@ -33,6 +33,8 @@ Run from a clean, committed worktree so both immutable image tags describe their
 
 Defaults can be overridden with environment variables such as `PROJECT_ID`, `REGION`, `SERVICE`, `DB_INSTANCE`, and `GCS_BUCKET`.
 
+`API_IMAGE_TAG` and `FRONTEND_IMAGE_TAG` can independently reuse a previously published immutable image when a committed change affects only one container.
+
 ## Verify
 
 ```bash

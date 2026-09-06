@@ -1,0 +1,12 @@
+.gcloudignore
+.git
+.next
+.env*
+!.env.example
+node_modules
+coverage
+*.log
+*.tsbuildinfo
+AGENTS.md
+CLAUDE.md
+**/.DS_Store
