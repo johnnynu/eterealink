@@ -18,6 +18,7 @@ GCS_BUCKET="${GCS_BUCKET:-eterealink-files}"
 FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-${PROJECT_ID}}"
 FRONTEND_ENV_FILE="${FRONTEND_ENV_FILE:-frontend/.env.local}"
 CUSTOM_FRONTEND_DOMAINS="${CUSTOM_FRONTEND_DOMAINS:-eterealink.com,www.eterealink.com}"
+REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-300s}"
 
 for command in curl gcloud git jq openssl; do
 	if ! command -v "${command}" >/dev/null 2>&1; then
@@ -253,7 +254,7 @@ gcloud run deploy "${SERVICE}" \
 	--concurrency=40 \
 	--min=0 \
 	--max=3 \
-	--timeout=300s \
+	--timeout="${REQUEST_TIMEOUT}" \
 	--startup-probe="httpGet.path=/readyz,httpGet.port=8080,timeoutSeconds=3,periodSeconds=5,failureThreshold=12" \
 	--liveness-probe="httpGet.path=/health,httpGet.port=8080,timeoutSeconds=3,periodSeconds=10,failureThreshold=3" \
 	--allow-unauthenticated \
@@ -283,7 +284,7 @@ gcloud run deploy "${FRONTEND_SERVICE}" \
 	--concurrency=80 \
 	--min=0 \
 	--max=3 \
-	--timeout=60s \
+	--timeout="${REQUEST_TIMEOUT}" \
 	--startup-probe="httpGet.path=/health,httpGet.port=3000,timeoutSeconds=3,periodSeconds=5,failureThreshold=12" \
 	--liveness-probe="httpGet.path=/health,httpGet.port=3000,timeoutSeconds=3,periodSeconds=10,failureThreshold=3" \
 	--allow-unauthenticated \

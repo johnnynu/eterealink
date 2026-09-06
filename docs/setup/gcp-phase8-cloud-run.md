@@ -32,6 +32,8 @@ make phase8-deploy
 
 Run from a clean, committed worktree so both immutable image tags describe their source exactly. The script reuses images already published for that commit, preserves an existing database secret, updates the migration job, waits for migrations to succeed, deploys both services, updates Firebase and bucket CORS, and checks the API directly and through the frontend proxy. It prefers Cloud Build and falls back to a local `linux/amd64` Docker build when an API Cloud Build submission is unavailable.
 
+Both Cloud Run services use a five-minute request timeout so the frontend proxy can carry the API's four-minute-thirty-second folder event streams without truncating them.
+
 Defaults can be overridden with environment variables such as `PROJECT_ID`, `REGION`, `SERVICE`, `DB_INSTANCE`, and `GCS_BUCKET`.
 
 `API_IMAGE_TAG` and `FRONTEND_IMAGE_TAG` can independently reuse a previously published immutable image when a committed change affects only one container.
