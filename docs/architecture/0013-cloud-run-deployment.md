@@ -20,7 +20,7 @@ Phase 7 produced deployable API, migration, and frontend artifacts in non-root c
 - Allow unauthenticated invocation because anonymous transfers and public share resolution are product requirements. Firebase bearer tokens continue to protect account endpoints.
 - Scale the API to zero, cap it at three instances, and configure database-aware startup plus process liveness probes. Use `/health` for the public and Cloud Run liveness path because Google reserves `/healthz` at its frontend; retain `/healthz` for local compatibility.
 - Set the Cloud Run request timeout and Go server write timeout to five minutes so the existing four-minute-thirty-second SSE rotation can finish normally.
-- Authorize the deterministic frontend hostname in Firebase Authentication and add its exact origin to the Cloud Storage bucket CORS policy.
+- Map `eterealink.com` and `www.eterealink.com` directly to the frontend service with Google-managed TLS. Authorize both custom hostnames and the deterministic frontend hostname in Firebase Authentication, and add their exact origins to the Cloud Storage bucket CORS policy.
 
 ## Consequences
 

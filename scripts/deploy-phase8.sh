@@ -17,6 +17,7 @@ FRONTEND_SERVICE_ACCOUNT="${FRONTEND_SERVICE_ACCOUNT:-eterealink-web@${PROJECT_I
 GCS_BUCKET="${GCS_BUCKET:-eterealink-files}"
 FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-${PROJECT_ID}}"
 FRONTEND_ENV_FILE="${FRONTEND_ENV_FILE:-frontend/.env.local}"
+CUSTOM_FRONTEND_DOMAINS="${CUSTOM_FRONTEND_DOMAINS:-eterealink.com,www.eterealink.com}"
 
 for command in curl gcloud git jq openssl; do
 	if ! command -v "${command}" >/dev/null 2>&1; then
@@ -303,7 +304,8 @@ firebase_config="$(curl --fail --silent --show-error \
 	--header "x-goog-user-project: ${PROJECT_ID}" \
 	"https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT_ID}/config")"
 firebase_payload="$(printf '%s' "${firebase_config}" | jq --arg domain "${frontend_hostname}" \
-	'{authorizedDomains: ((.authorizedDomains + [$domain]) | unique)}')"
+	--arg custom_domains "${CUSTOM_FRONTEND_DOMAINS}" \
+	'{authorizedDomains: ((.authorizedDomains + [$domain] + ($custom_domains | split(",") | map(select(length > 0)))) | unique)}')"
 curl --fail --silent --show-error \
 	--request PATCH \
 	--header "Authorization: Bearer ${access_token}" \

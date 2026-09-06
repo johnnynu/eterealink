@@ -16,6 +16,7 @@ Phase 8 publishes the Go API and Next.js frontend images to Artifact Registry, a
 | Database secret | `eterealink-database-url` |
 | Runtime identity | `eterealink-api@eterealink.iam.gserviceaccount.com` |
 | Frontend identity | `eterealink-web@eterealink.iam.gserviceaccount.com` |
+| Public domains | `eterealink.com`, `www.eterealink.com` |
 
 The Cloud SQL instance has a public address but no authorized networks. The API and migration job reach it through Cloud Run's managed Cloud SQL integration. Phase 9 replaces this transitional path with private IP and Direct VPC egress.
 
@@ -34,6 +35,24 @@ Run from a clean, committed worktree so both immutable image tags describe their
 Defaults can be overridden with environment variables such as `PROJECT_ID`, `REGION`, `SERVICE`, `DB_INSTANCE`, and `GCS_BUCKET`.
 
 `API_IMAGE_TAG` and `FRONTEND_IMAGE_TAG` can independently reuse a previously published immutable image when a committed change affects only one container.
+
+## Custom domain
+
+Domain ownership is verified once through Google Search Console. The frontend has direct Cloud Run mappings for the apex and `www` hostnames:
+
+```bash
+gcloud domains verify eterealink.com
+gcloud beta run domain-mappings create \
+  --service=eterealink-web \
+  --domain=eterealink.com \
+  --region=us-west1
+gcloud beta run domain-mappings create \
+  --service=eterealink-web \
+  --domain=www.eterealink.com \
+  --region=us-west1
+```
+
+Porkbun holds the generated apex `A` and `AAAA` records and the `www` CNAME. Google provisions and renews the certificates after those records resolve. The deployment script preserves all three production origins in Cloud Storage CORS and Firebase Authentication.
 
 ## Verify
 
@@ -63,4 +82,4 @@ gcloud run jobs executions list \
   --region=us-west1
 ```
 
-The complete application is available at `https://eterealink-web-300331831616.us-west1.run.app`. The frontend keeps API control-plane calls same-origin through its server-side `/api` proxy; file bytes continue to move directly between the browser and Cloud Storage.
+The complete application is available at `https://eterealink.com` and `https://www.eterealink.com`, with `https://eterealink-web-300331831616.us-west1.run.app` retained as a fallback. The frontend keeps API control-plane calls same-origin through its server-side `/api` proxy; file bytes continue to move directly between the browser and Cloud Storage.

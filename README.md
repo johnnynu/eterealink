@@ -61,7 +61,7 @@ Implemented:
 
 The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
 
-The Phase 8 application is live at [`https://eterealink-web-300331831616.us-west1.run.app`](https://eterealink-web-300331831616.us-west1.run.app), backed by the deployed [API](https://eterealink-api-300331831616.us-west1.run.app). API process and dependency checks are `/health` and `/readyz`.
+The Phase 8 application is deployed at [`https://eterealink.com`](https://eterealink.com), with the deterministic [`run.app` address](https://eterealink-web-300331831616.us-west1.run.app) retained as a fallback. It is backed by the deployed [API](https://eterealink-api-300331831616.us-west1.run.app). API process and dependency checks are `/health` and `/readyz`.
 
 ### Post-MVP media roadmap
 

@@ -3,7 +3,9 @@
     "origin": [
       "http://localhost:3000",
       "http://127.0.0.1:3000",
-      "https://eterealink-web-300331831616.us-west1.run.app"
+      "https://eterealink-web-300331831616.us-west1.run.app",
+      "https://eterealink.com",
+      "https://www.eterealink.com"
     ],
     "method": [
       "GET",
