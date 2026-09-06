@@ -337,6 +337,8 @@ footer { min-height: 84px; border-top: 1px solid var(--line); color: var(--muted
 .queue-progress span { display: block; height: 100%; border-radius: inherit; background: var(--green); }
 .upload-queue-item button, .clear-upload-queue { cursor: pointer; border: 0; border-radius: 7px; padding: 6px 9px; color: var(--green); background: rgba(205, 232, 216, .4); font: 750 11px var(--font-body); }
 .upload-queue-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.delete-recovery-confirmation { display: inline-flex; gap: 6px; }
+.upload-queue-item .delete-recovery-upload, .upload-recovery-item .delete-recovery-upload, .upload-queue-item .delete-recovery-confirmation .danger, .upload-recovery-item .delete-recovery-confirmation .danger { color: #a04a3f; background: rgba(160, 74, 63, .08); }
 .upload-queue-item button:disabled, .upload-recovery-item button:disabled, .upload-recoveries .secondary-button.is-disabled { cursor: wait; opacity: .5; pointer-events: none; }
 .clear-upload-queue { justify-self: end; }
 .library-error { margin: 22px 0 0; }

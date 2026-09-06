@@ -481,7 +481,28 @@ describe("PersistentFileLibrary", () => {
 		const discard = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Forget recovery on this browser")!;
 		await act(async () => { discard.click(); });
 		expect(recovery.deleteUploadRecovery).toHaveBeenCalledWith("pending-1");
+		expect(api.deletePersistentFile).not.toHaveBeenCalled();
 		expect(Array.from(container.querySelectorAll("button")).some((button) => button.textContent === "Retry completion")).toBe(false);
+	});
+
+	it("confirms before deleting a paused upload from the server", async () => {
+		recovery.listUploadRecoveries.mockResolvedValueOnce([recoveryRecord()]);
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		api.deletePersistentFile.mockResolvedValue(undefined);
+		const container = await renderLibrary();
+		await act(async () => { await Promise.resolve(); });
+
+		const deleteUpload = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Delete upload")!;
+		act(() => deleteUpload.click());
+		expect(api.deletePersistentFile).not.toHaveBeenCalled();
+		expect(container.textContent).toContain("Delete pending upload");
+
+		const confirm = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Delete pending upload")!;
+		await act(async () => { confirm.click(); });
+
+		expect(api.deletePersistentFile).toHaveBeenCalledWith("pending-1", "verified-token");
+		expect(recovery.deleteUploadRecovery).toHaveBeenCalledWith("pending-1");
+		expect(container.querySelector(".upload-recovery-item")).toBeNull();
 	});
 
   it("accepts files dropped onto the persistent library", async () => {

@@ -211,6 +211,8 @@ export function PersistentFileLibrary() {
 	const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
 	const [recoveries, setRecoveries] = useState<UploadRecoveryRecord[]>([]);
 	const [recoveringID, setRecoveringID] = useState("");
+	const [deletingRecoveryID, setDeletingRecoveryID] = useState("");
+	const [confirmDeleteRecoveryID, setConfirmDeleteRecoveryID] = useState("");
 	const [folderUpdateToast, setFolderUpdateToast] = useState(0);
 	const activeUpload = useRef<{ id: string; abort: () => void } | null>(null);
 	const uploadOperation = useRef<"upload" | string | null>(null);
@@ -251,7 +253,7 @@ export function PersistentFileLibrary() {
 	displayedFolderSnapshot.current = folderSnapshot(currentFolder, breadcrumbs, folders, files, summary, totalCount, nextCursor);
 	displayedAccessSnapshot.current = folderAccessSnapshot(members, folderInvites);
 	const canUpload = scope === "owned" || (scope === "shared" && currentFolder?.role === "CONTRIBUTOR");
-	const uploadBusy = uploading || Boolean(recoveringID);
+	const uploadBusy = uploading || Boolean(recoveringID) || Boolean(deletingRecoveryID);
 	const visibleRecoveries = recoveries.filter((record) => record.userId === user?.id
 		&& !uploadQueue.some((item) => item.fileId === record.fileId));
 
@@ -1011,6 +1013,44 @@ export function PersistentFileLibrary() {
 		}));
 	}
 
+	async function deleteRecoveredUpload(record: UploadRecoveryRecord) {
+		if (uploadOperation.current) return;
+		uploadOperation.current = `delete-${record.fileId}`;
+		setDeletingRecoveryID(record.fileId);
+		setError("");
+		try {
+			const token = await getIDToken();
+			try {
+				await deletePersistentFile(record.fileId, token);
+			} catch (deleteError) {
+				if (!(deleteError instanceof APIError) || deleteError.status !== 404) throw deleteError;
+			}
+			await deleteUploadRecovery(record.fileId);
+			setRecoveries((items) => items.filter((item) => item.fileId !== record.fileId));
+			setUploadQueue((items) => items.filter((item) => item.fileId !== record.fileId));
+			setConfirmDeleteRecoveryID("");
+		} catch (deleteError) {
+			setError(errorMessage(deleteError, "The pending upload could not be deleted. Please try again."));
+		} finally {
+			uploadOperation.current = null;
+			setDeletingRecoveryID("");
+		}
+	}
+
+	function deleteRecoveryControls(record: UploadRecoveryRecord) {
+		if (confirmDeleteRecoveryID !== record.fileId) {
+			return <button type="button" className="delete-recovery-upload" disabled={uploadBusy} onClick={() => setConfirmDeleteRecoveryID(record.fileId)}>Delete upload</button>;
+		}
+		return (
+			<span className="delete-recovery-confirmation">
+				<button type="button" disabled={Boolean(deletingRecoveryID)} onClick={() => setConfirmDeleteRecoveryID("")}>Cancel</button>
+				<button type="button" className="danger" disabled={Boolean(deletingRecoveryID)} onClick={() => void deleteRecoveredUpload(record)}>
+					{deletingRecoveryID === record.fileId ? "Deleting…" : "Delete pending upload"}
+				</button>
+			</span>
+		);
+	}
+
 	function cancelActiveUpload(itemID: string) {
 		if (activeUpload.current?.id === itemID) activeUpload.current.abort();
 		else pendingPauseIDs.current.add(itemID);
@@ -1287,10 +1327,13 @@ export function PersistentFileLibrary() {
 								{item.completionPending ? "Retry completion" : item.recoverable ? "Resume" : "Retry"}
 							</button>
 							{item.fileId && recoveries.some((record) => record.fileId === item.fileId) && (
-								<button type="button" disabled={uploadBusy} onClick={() => {
-									const record = recoveries.find((entry) => entry.fileId === item.fileId);
-									if (record) void discardRecovery(record);
-								}}>Forget recovery on this browser</button>
+								<>
+									<button type="button" disabled={uploadBusy} onClick={() => {
+										const record = recoveries.find((entry) => entry.fileId === item.fileId);
+										if (record) void discardRecovery(record);
+									}}>Forget recovery on this browser</button>
+									{deleteRecoveryControls(recoveries.find((record) => record.fileId === item.fileId)!)}
+								</>
 							)}
 						</div>
 					)}
@@ -1321,9 +1364,10 @@ export function PersistentFileLibrary() {
 						</label>
 					)}
 					<button type="button" disabled={uploadBusy} onClick={() => void discardRecovery(record)}>Forget recovery on this browser</button>
+					{deleteRecoveryControls(record)}
 				</div>
 			))}
-			<small>Forgetting recovery only removes this browser’s recovery data. It does not pause or cancel an active upload, and it does not delete pending server metadata.</small>
+			<small>Forgetting recovery only removes this browser’s recovery data. It does not pause or cancel an active upload, and it does not delete pending server metadata. Use Delete upload to remove the pending upload from Eterealink.</small>
 		</section>
 	  )}
       {error && <p className="error-message library-error" role="alert">{error}</p>}
