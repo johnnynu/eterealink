@@ -1115,12 +1115,14 @@ func (p *Postgres) MoveOwnedFiles(ctx context.Context, ownerID string, fileIDs [
 func (p *Postgres) GetAccessibleFile(ctx context.Context, userID, fileID string) (domain.File, error) {
 	file, err := scanFile(p.pool.QueryRow(ctx, `
 		WITH RECURSIVE ancestors AS (
-			SELECT fo.id, fo.parent_folder_id FROM folders fo JOIN files fi ON fi.folder_id = fo.id WHERE fi.id = $1
-			UNION ALL SELECT p.id, p.parent_folder_id FROM folders p JOIN ancestors a ON a.parent_folder_id = p.id
+			SELECT fo.id, fo.owner_id, fo.parent_folder_id FROM folders fo JOIN files fi ON fi.folder_id = fo.id WHERE fi.id = $1
+			UNION ALL SELECT p.id, p.owner_id, p.parent_folder_id FROM folders p JOIN ancestors a ON a.parent_folder_id = p.id
 		)
 		SELECT f.id, f.owner_id, f.folder_id, f.transfer_id, f.storage_key, f.original_name, f.mime_type,
 		       f.size_bytes, f.upload_status, f.created_at, f.completed_at, f.expires_at
-		FROM files f WHERE f.id = $1 AND (f.owner_id = $2 OR EXISTS (
+		FROM files f WHERE f.id = $1 AND (f.owner_id = $2
+		  OR EXISTS (SELECT 1 FROM ancestors a WHERE a.owner_id = $2)
+		  OR EXISTS (
 			SELECT 1 FROM folder_members m JOIN ancestors a ON a.id = m.folder_id WHERE m.user_id = $2
 			  AND (m.expires_at IS NULL OR m.expires_at > $3)
 		))`, fileID, userID, time.Now().UTC()))

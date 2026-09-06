@@ -194,6 +194,9 @@ func TestPostgresFolderOwnershipInvitesAndContributorAccess(t *testing.T) {
 	if err != nil || len(ownerContents.Files) != 3 || ownerContents.Files[0].File.OwnerID == nil || *ownerContents.Files[0].File.OwnerID != viewer.ID || ownerContents.Files[0].UploaderName != viewer.DisplayName {
 		t.Fatalf("mixed-owner contents = %#v, error = %v", ownerContents.Files, err)
 	}
+	if _, err := database.GetAccessibleFile(ctx, owner.ID, contributedFile.ID); err != nil {
+		t.Fatalf("folder owner accessing contributor file: %v", err)
+	}
 	if err := database.DeleteOwnedFile(ctx, owner.ID, contributedFile.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("owner deleting contributor file error = %v", err)
 	}
