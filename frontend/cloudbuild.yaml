@@ -7,8 +7,6 @@ steps:
       - --build-arg
       - NEXT_PUBLIC_MAX_UPLOAD_BYTES=1073741824
       - --build-arg
-      - NEXT_PUBLIC_MAX_PERSISTENT_FILE_BYTES=5368709120
-      - --build-arg
       - NEXT_PUBLIC_MAX_TRANSFER_BYTES=1073741824
       - --build-arg
       - NEXT_PUBLIC_MAX_FILES=10

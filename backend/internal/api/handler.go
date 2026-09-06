@@ -91,6 +91,7 @@ func newHandler(
 	mux.HandleFunc("GET /readyz", handler.ready)
 	mux.Handle("GET /v1/me", handler.requireAuthentication(http.HandlerFunc(handler.me)))
 	mux.Handle("PATCH /v1/me", handler.requireAuthentication(http.HandlerFunc(handler.updateMe)))
+	mux.Handle("PATCH /v1/admin/users/{userID}/quota", handler.requireAuthentication(http.HandlerFunc(handler.updateUserQuota)))
 	mux.Handle("POST /v1/files", handler.requireAuthentication(http.HandlerFunc(handler.createPersistentFile)))
 	mux.Handle("GET /v1/files", handler.requireAuthentication(http.HandlerFunc(handler.listPersistentFiles)))
 	mux.Handle("POST /v1/files/{id}/complete", handler.requireAuthentication(http.HandlerFunc(handler.completePersistentFile)))
@@ -223,6 +224,56 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": updated})
+}
+
+func (h *Handler) updateUserQuota(w http.ResponseWriter, r *http.Request) {
+	caller, ok := authenticatedUser(r)
+	if !ok {
+		writeAuthenticationRequired(w, "a valid bearer token is required")
+		return
+	}
+	if !caller.IsAdmin {
+		writeError(w, http.StatusForbidden, "forbidden", service.ErrForbidden.Error())
+		return
+	}
+	var input struct {
+		StorageQuotaBytes json.RawMessage `json:"storageQuotaBytes"`
+	}
+	if err := decodeJSON(w, r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if len(input.StorageQuotaBytes) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, "validation_failed", "storageQuotaBytes is required")
+		return
+	}
+	var quota *int64
+	if string(input.StorageQuotaBytes) != "null" {
+		var value int64
+		if err := json.Unmarshal(input.StorageQuotaBytes, &value); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, "validation_failed", "storageQuotaBytes must be a positive integer or null")
+			return
+		}
+		quota = &value
+	}
+	updated, err := h.users.UpdateStorageQuota(r.Context(), caller, r.PathValue("userID"), quota)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, "forbidden", err.Error())
+		case errors.Is(err, service.ErrInvalidUserID):
+			writeError(w, http.StatusUnprocessableEntity, "validation_failed", err.Error())
+		case errors.Is(err, service.ErrInvalidQuota):
+			writeError(w, http.StatusUnprocessableEntity, "validation_failed", err.Error())
+		case errors.Is(err, domain.ErrNotFound):
+			writeError(w, http.StatusNotFound, "not_found", "user was not found")
+		default:
+			h.logger.Error("update user storage quota failed", "target_user_id", r.PathValue("userID"), "error", err)
+			writeError(w, http.StatusInternalServerError, "internal_error", "unable to update storage quota")
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"quota": updated})
 }
 
 func authenticatedUser(r *http.Request) (domain.User, bool) {

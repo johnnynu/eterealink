@@ -15,10 +15,12 @@ import (
 
 type FileStore interface {
 	CreateOwnedFile(ctx context.Context, file domain.File) error
+	CreateOwnedFileWithinQuota(ctx context.Context, file domain.File, defaultQuota int64) error
 	GetOwnedFile(ctx context.Context, ownerID, fileID string) (domain.File, error)
 	CompleteOwnedFile(ctx context.Context, ownerID, fileID string, now time.Time) (domain.File, error)
 	ListOwnedFiles(ctx context.Context, ownerID string, now time.Time) ([]domain.OwnedFile, error)
 	GetOwnedFileUsage(ctx context.Context, ownerID string) (domain.FileLibrarySummary, error)
+	GetEffectiveStorageQuota(ctx context.Context, ownerID string, defaultQuota int64) (int64, error)
 	CreateOwnedFileShare(ctx context.Context, ownerID, fileID string, share domain.ShareLink, now time.Time) error
 	RevokeOwnedFileShare(ctx context.Context, ownerID, fileID, shareID string, now time.Time) error
 	DeleteOwnedFile(ctx context.Context, ownerID, fileID string) error
@@ -34,7 +36,6 @@ type Files struct {
 	storage         PersistentFileBackend
 	now             Clock
 	signedURLTTL    time.Duration
-	maxFileBytes    int64
 	maxAccountBytes int64
 }
 
@@ -73,12 +74,8 @@ type CreateFileShareResult struct {
 	SharePath string           `json:"sharePath"`
 }
 
-func NewFiles(store FileStore, backend PersistentFileBackend, now Clock, signedURLTTL time.Duration, maxFileBytes int64, maxAccountBytes ...int64) *Files {
-	service := &Files{store: store, storage: backend, now: now, signedURLTTL: signedURLTTL, maxFileBytes: maxFileBytes}
-	if len(maxAccountBytes) > 0 {
-		service.maxAccountBytes = maxAccountBytes[0]
-	}
-	return service
+func NewFiles(store FileStore, backend PersistentFileBackend, now Clock, signedURLTTL time.Duration, maxAccountBytes int64) *Files {
+	return &Files{store: store, storage: backend, now: now, signedURLTTL: signedURLTTL, maxAccountBytes: maxAccountBytes}
 }
 
 func (s *Files) CreateUpload(ctx context.Context, ownerID string, input CreateFileUploadInput) (CreateFileUploadResult, error) {
@@ -87,17 +84,8 @@ func (s *Files) CreateUpload(ctx context.Context, ownerID string, input CreateFi
 	if ownerID == "" || input.OriginalName == "" {
 		return CreateFileUploadResult{}, ErrInvalidName
 	}
-	if input.SizeBytes <= 0 || input.SizeBytes > s.maxFileBytes {
+	if input.SizeBytes <= 0 {
 		return CreateFileUploadResult{}, ErrInvalidSize
-	}
-	if s.maxAccountBytes > 0 {
-		summary, err := s.store.GetOwnedFileUsage(ctx, ownerID)
-		if err != nil {
-			return CreateFileUploadResult{}, err
-		}
-		if summary.TotalBytes > s.maxAccountBytes-input.SizeBytes {
-			return CreateFileUploadResult{}, ErrStorageQuotaExceeded
-		}
 	}
 	if strings.TrimSpace(input.MIMEType) == "" {
 		input.MIMEType = mime.TypeByExtension(path.Ext(input.OriginalName))
@@ -120,13 +108,7 @@ func (s *Files) CreateUpload(ctx context.Context, ownerID string, input CreateFi
 	if err != nil {
 		return CreateFileUploadResult{}, fmt.Errorf("sign persistent upload: %w", err)
 	}
-	if quotaStore, ok := s.store.(interface {
-		CreateOwnedFileWithinQuota(context.Context, domain.File, int64) error
-	}); ok && s.maxAccountBytes > 0 {
-		err = quotaStore.CreateOwnedFileWithinQuota(ctx, file, s.maxAccountBytes)
-	} else {
-		err = s.store.CreateOwnedFile(ctx, file)
-	}
+	err = s.store.CreateOwnedFileWithinQuota(ctx, file, s.maxAccountBytes)
 	if errors.Is(err, domain.ErrQuotaExceeded) {
 		return CreateFileUploadResult{}, ErrStorageQuotaExceeded
 	}
@@ -168,7 +150,11 @@ func (s *Files) List(ctx context.Context, ownerID string) (FileLibraryResult, er
 	if err != nil {
 		return FileLibraryResult{}, err
 	}
-	summary.QuotaBytes = s.maxAccountBytes
+	summary.AccountTotalBytes = summary.TotalBytes
+	summary.QuotaBytes, err = s.store.GetEffectiveStorageQuota(ctx, ownerID, s.maxAccountBytes)
+	if err != nil {
+		return FileLibraryResult{}, err
+	}
 	return FileLibraryResult{Files: files, Summary: summary}, nil
 }
 

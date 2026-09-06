@@ -12,6 +12,7 @@ import {
   revokePersistentFileShare,
   resolveShare,
 	streamFolderEvents,
+	resumeResumableUpload,
   uploadResumable,
 } from "./api";
 
@@ -203,4 +204,41 @@ describe("API client", () => {
     }));
     expect(progress).toHaveBeenLastCalledWith(100);
   });
+
+	it("persists session and confirmed-offset callbacks without exposing the session", async () => {
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(new Response(null, { status: 201, headers: { Location: "https://upload.invalid/private-session" } }))
+			.mockResolvedValueOnce(new Response(null, { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const onSession = vi.fn();
+		const onConfirmedOffset = vi.fn();
+		const upload = uploadResumable(
+			new File(["hello"], "hello.txt", { type: "text/plain" }),
+			{ url: "https://signed.invalid/start", method: "POST", headers: {}, expiresAt: "soon" },
+			vi.fn(),
+			{ onSession, onConfirmedOffset },
+		);
+		await upload.promise;
+		expect(onSession).toHaveBeenCalledWith("https://upload.invalid/private-session");
+		expect(onConfirmedOffset).toHaveBeenLastCalledWith(5);
+	});
+
+	it("queries the authoritative offset before resuming at the next byte", async () => {
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(new Response(null, { status: 308, headers: { Range: "bytes=0-4" } }))
+			.mockResolvedValueOnce(new Response(null, { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const file = new File(["0123456789"], "ten.txt", { type: "text/plain" });
+		const confirmed = vi.fn();
+		const upload = resumeResumableUpload(file, "https://upload.invalid/private-session", vi.fn(), confirmed);
+		await upload.promise;
+		expect(fetchMock).toHaveBeenNthCalledWith(1, "https://upload.invalid/private-session", expect.objectContaining({
+			method: "PUT", headers: { "Content-Range": "bytes */10" }, body: null,
+		}));
+		expect(fetchMock).toHaveBeenNthCalledWith(2, "https://upload.invalid/private-session", expect.objectContaining({
+			headers: expect.objectContaining({ "Content-Range": "bytes 5-9/10" }),
+		}));
+		expect(confirmed).toHaveBeenNthCalledWith(1, 5);
+		expect(confirmed).toHaveBeenLastCalledWith(10);
+	});
 });

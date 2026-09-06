@@ -8,17 +8,22 @@ import (
 	"unicode/utf8"
 
 	"github.com/eterealink/eterealink/backend/internal/domain"
+	"github.com/google/uuid"
 )
 
 var (
 	ErrInvalidIdentity    = errors.New("authenticated identity is incomplete")
 	ErrInvalidDisplayName = errors.New("display name must be 3 to 40 characters and cannot contain control characters")
 	ErrDisplayNameTaken   = domain.ErrDisplayNameTaken
+	ErrForbidden          = errors.New("administrator access is required")
+	ErrInvalidUserID      = errors.New("user id must be a valid UUID")
+	ErrInvalidQuota       = errors.New("storage quota must be positive or null")
 )
 
 type UserStore interface {
 	UpsertUser(ctx context.Context, user domain.User) (domain.User, error)
 	UpdateCustomDisplayName(ctx context.Context, userID string, displayName *string) (domain.User, error)
+	UpdateStorageQuota(ctx context.Context, userID string, storageQuotaBytes *int64, defaultQuota int64) (domain.UserQuota, error)
 }
 
 type AuthenticatedIdentity struct {
@@ -28,12 +33,31 @@ type AuthenticatedIdentity struct {
 }
 
 type Users struct {
-	store UserStore
-	now   Clock
+	store        UserStore
+	now          Clock
+	defaultQuota int64
 }
 
-func NewUsers(store UserStore, now Clock) *Users {
-	return &Users{store: store, now: now}
+func NewUsers(store UserStore, now Clock, defaultQuota ...int64) *Users {
+	quota := int64(25 * 1024 * 1024 * 1024)
+	if len(defaultQuota) > 0 {
+		quota = defaultQuota[0]
+	}
+	return &Users{store: store, now: now, defaultQuota: quota}
+}
+
+func (s *Users) UpdateStorageQuota(ctx context.Context, caller domain.User, targetUserID string, storageQuotaBytes *int64) (domain.UserQuota, error) {
+	if !caller.IsAdmin {
+		return domain.UserQuota{}, ErrForbidden
+	}
+	targetUserID = strings.TrimSpace(targetUserID)
+	if _, err := uuid.Parse(targetUserID); err != nil {
+		return domain.UserQuota{}, ErrInvalidUserID
+	}
+	if storageQuotaBytes != nil && *storageQuotaBytes <= 0 {
+		return domain.UserQuota{}, ErrInvalidQuota
+	}
+	return s.store.UpdateStorageQuota(ctx, targetUserID, storageQuotaBytes, s.defaultQuota)
 }
 
 func (s *Users) Provision(ctx context.Context, identity AuthenticatedIdentity) (domain.User, error) {

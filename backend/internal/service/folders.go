@@ -94,7 +94,7 @@ type fileCursor struct {
 }
 
 func NewFolders(store FolderStore, now Clock, maxAccountBytes ...int64) *Folders {
-	service := &Folders{store: store, now: now}
+	service := &Folders{store: store, now: now, maxAccountBytes: 25 * 1024 * 1024 * 1024}
 	if len(maxAccountBytes) > 0 {
 		service.maxAccountBytes = maxAccountBytes[0]
 	}
@@ -192,8 +192,8 @@ func (s *Folders) ListRoot(ctx context.Context, userID, scope string, input List
 		return domain.FolderContents{}, err
 	}
 	result, hasMore, err := s.store.GetRootContents(ctx, userID, scope, s.now().UTC(), query)
-	if err == nil && scope == "owned" {
-		result.Summary.QuotaBytes = s.maxAccountBytes
+	if err == nil {
+		err = s.applyAccountSummary(ctx, userID, &result)
 	}
 	result.NextCursor = nextLibraryCursor(query, result, hasMore)
 	return result, err
@@ -205,8 +205,36 @@ func (s *Folders) Contents(ctx context.Context, userID, folderID string, input L
 		return domain.FolderContents{}, err
 	}
 	result, hasMore, err := s.store.GetFolderContents(ctx, strings.TrimSpace(userID), strings.TrimSpace(folderID), s.now().UTC(), query)
+	if err == nil {
+		err = s.applyAccountSummary(ctx, strings.TrimSpace(userID), &result)
+	}
 	result.NextCursor = nextLibraryCursor(query, result, hasMore)
 	return result, err
+}
+
+func (s *Folders) applyAccountSummary(ctx context.Context, userID string, result *domain.FolderContents) error {
+	result.Summary.AccountTotalBytes = result.Summary.TotalBytes
+	if usageStore, ok := s.store.(interface {
+		GetOwnedFileUsage(context.Context, string) (domain.FileLibrarySummary, error)
+	}); ok {
+		accountSummary, err := usageStore.GetOwnedFileUsage(ctx, userID)
+		if err != nil {
+			return err
+		}
+		result.Summary.AccountTotalBytes = accountSummary.TotalBytes
+	}
+	if quotaStore, ok := s.store.(interface {
+		GetEffectiveStorageQuota(context.Context, string, int64) (int64, error)
+	}); ok {
+		quota, err := quotaStore.GetEffectiveStorageQuota(ctx, userID, s.maxAccountBytes)
+		if err != nil {
+			return err
+		}
+		result.Summary.QuotaBytes = quota
+	} else {
+		result.Summary.QuotaBytes = s.maxAccountBytes
+	}
+	return nil
 }
 
 func (s *Folders) Update(ctx context.Context, ownerID, folderID string, input UpdateFolderInput) (domain.Folder, error) {

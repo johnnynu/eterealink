@@ -21,7 +21,15 @@ type User struct {
 	DisplayName         string    `json:"displayName"`
 	IdentityDisplayName string    `json:"identityDisplayName,omitempty"`
 	CustomDisplayName   *string   `json:"customDisplayName"`
+	StorageQuotaBytes   *int64    `json:"-"`
+	IsAdmin             bool      `json:"-"`
 	CreatedAt           time.Time `json:"createdAt"`
+}
+
+type UserQuota struct {
+	UserID            string `json:"userId"`
+	StorageQuotaBytes *int64 `json:"storageQuotaBytes"`
+	EffectiveQuota    int64  `json:"effectiveQuotaBytes"`
 }
 
 type FileStatus string
@@ -105,9 +113,10 @@ type OwnedFile struct {
 }
 
 type FileLibrarySummary struct {
-	FileCount  int64 `json:"fileCount"`
-	TotalBytes int64 `json:"totalBytes"`
-	QuotaBytes int64 `json:"quotaBytes,omitempty"`
+	FileCount         int64 `json:"fileCount"`
+	TotalBytes        int64 `json:"totalBytes"`
+	AccountTotalBytes int64 `json:"accountTotalBytes"`
+	QuotaBytes        int64 `json:"quotaBytes,omitempty"`
 }
 
 type FolderRole string

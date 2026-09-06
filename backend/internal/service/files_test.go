@@ -91,9 +91,12 @@ func TestPersistentFileLifecycle(t *testing.T) {
 }
 
 func TestPersistentFileRejectsInvalidInputAndMismatchedObject(t *testing.T) {
-	files := NewFiles(newOwnedFileStore(), &ownedFileBackend{}, time.Now, 15*time.Minute, 10)
-	if _, err := files.CreateUpload(context.Background(), "user-1", CreateFileUploadInput{OriginalName: "large.bin", SizeBytes: 11}); !errors.Is(err, ErrInvalidSize) {
-		t.Fatalf("large upload error = %v", err)
+	files := NewFiles(newOwnedFileStore(), &ownedFileBackend{}, time.Now, 15*time.Minute, 10*1024*1024*1024)
+	if _, err := files.CreateUpload(context.Background(), "user-1", CreateFileUploadInput{OriginalName: "empty.bin", SizeBytes: 0}); !errors.Is(err, ErrInvalidSize) {
+		t.Fatalf("empty upload error = %v", err)
+	}
+	if _, err := files.CreateUpload(context.Background(), "user-1", CreateFileUploadInput{OriginalName: "large.bin", SizeBytes: 6 * 1024 * 1024 * 1024}); err != nil {
+		t.Fatalf("file over former 5 GiB cap was rejected: %v", err)
 	}
 	created, err := files.CreateUpload(context.Background(), "user-1", CreateFileUploadInput{OriginalName: "notes.txt", SizeBytes: 5})
 	if err != nil {
@@ -113,7 +116,7 @@ func TestPersistentFileEnforcesAccountQuotaAndAssignsFolder(t *testing.T) {
 	store.files["existing"] = domain.File{
 		ID: "existing", OwnerID: &ownerID, OriginalName: "existing.bin", SizeBytes: 8, Status: domain.FileStatusReady,
 	}
-	files := NewFiles(store, &ownedFileBackend{}, time.Now, 15*time.Minute, 10, 10)
+	files := NewFiles(store, &ownedFileBackend{}, time.Now, 15*time.Minute, 10)
 	folderID := "folder-1"
 	if _, err := files.CreateUpload(context.Background(), ownerID, CreateFileUploadInput{
 		OriginalName: "too-large.bin", SizeBytes: 3, FolderID: &folderID,
@@ -131,9 +134,30 @@ func TestPersistentFileEnforcesAccountQuotaAndAssignsFolder(t *testing.T) {
 	}
 }
 
+func TestPersistentFileUsesLargerPerUserQuotaOverride(t *testing.T) {
+	store := newOwnedFileStore()
+	override := int64(20)
+	store.quota = &override
+	files := NewFiles(store, &ownedFileBackend{}, time.Now, 15*time.Minute, 10)
+	created, err := files.CreateUpload(context.Background(), "user-1", CreateFileUploadInput{
+		OriginalName: "larger-than-default.bin", SizeBytes: 11,
+	})
+	if err != nil {
+		t.Fatalf("larger override upload: %v", err)
+	}
+	library, err := files.List(context.Background(), "user-1")
+	if err != nil || library.Summary.TotalBytes != 11 || library.Summary.QuotaBytes != 20 || library.Summary.FileCount != 1 {
+		t.Fatalf("pending override summary = %#v, error = %v", library.Summary, err)
+	}
+	if created.File.Status != domain.FileStatusPending {
+		t.Fatalf("created status = %s", created.File.Status)
+	}
+}
+
 type ownedFileStore struct {
 	files  map[string]domain.File
 	shares map[string]domain.ShareLink
+	quota  *int64
 }
 
 func newOwnedFileStore() *ownedFileStore {
@@ -143,6 +167,31 @@ func newOwnedFileStore() *ownedFileStore {
 func (s *ownedFileStore) CreateOwnedFile(_ context.Context, file domain.File) error {
 	s.files[file.ID] = file
 	return nil
+}
+
+func (s *ownedFileStore) CreateOwnedFileWithinQuota(_ context.Context, file domain.File, defaultQuota int64) error {
+	quota := defaultQuota
+	if s.quota != nil {
+		quota = *s.quota
+	}
+	var reserved int64
+	for _, existing := range s.files {
+		if existing.OwnerID != nil && file.OwnerID != nil && *existing.OwnerID == *file.OwnerID {
+			reserved += existing.SizeBytes
+		}
+	}
+	if file.SizeBytes > quota || reserved > quota-file.SizeBytes {
+		return domain.ErrQuotaExceeded
+	}
+	s.files[file.ID] = file
+	return nil
+}
+
+func (s *ownedFileStore) GetEffectiveStorageQuota(_ context.Context, _ string, defaultQuota int64) (int64, error) {
+	if s.quota != nil {
+		return *s.quota, nil
+	}
+	return defaultQuota, nil
 }
 
 func (s *ownedFileStore) GetOwnedFile(_ context.Context, ownerID, fileID string) (domain.File, error) {
@@ -185,7 +234,7 @@ func (s *ownedFileStore) ListOwnedFiles(_ context.Context, ownerID string, now t
 func (s *ownedFileStore) GetOwnedFileUsage(_ context.Context, ownerID string) (domain.FileLibrarySummary, error) {
 	var summary domain.FileLibrarySummary
 	for _, file := range s.files {
-		if file.OwnerID != nil && *file.OwnerID == ownerID && file.Status == domain.FileStatusReady {
+		if file.OwnerID != nil && *file.OwnerID == ownerID {
 			summary.FileCount++
 			summary.TotalBytes += file.SizeBytes
 		}

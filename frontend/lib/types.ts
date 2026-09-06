@@ -61,6 +61,7 @@ export type OwnedFileRecord = {
 export type FileLibrarySummary = {
 	fileCount: number;
 	totalBytes: number;
+	accountTotalBytes?: number;
 	quotaBytes?: number;
 };
 

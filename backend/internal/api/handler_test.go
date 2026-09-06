@@ -166,6 +166,66 @@ func TestUpdateCurrentUserDisplayNameValidationAndConflict(t *testing.T) {
 	}
 }
 
+func TestAdministratorQuotaEndpoint(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const targetID = "98000000-0000-4000-8000-000000000001"
+	newHandler := func(admin bool, store *userStore) http.Handler {
+		store.user = domain.User{
+			ID: "97000000-0000-4000-8000-000000000001", FirebaseUID: "firebase-user",
+			Email: "admin@example.com", DisplayName: "Admin", IdentityDisplayName: "Admin", IsAdmin: admin,
+		}
+		users := service.NewUsers(store, time.Now, 25)
+		verifier := tokenVerifier{claims: identity.Claims{UID: "firebase-user", Email: "admin@example.com", DisplayName: "Admin"}}
+		return NewHandler(nil, nil, nil, users, verifier, readiness{}, logger)
+	}
+	request := func(handler http.Handler, body, token, target string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPatch, "/v1/admin/users/"+target+"/quota", strings.NewReader(body))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		return response
+	}
+
+	store := &userStore{}
+	handler := newHandler(true, store)
+	response := request(handler, `{"storageQuotaBytes":100}`, "verified-token", targetID)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"storageQuotaBytes":100`) || !strings.Contains(response.Body.String(), `"effectiveQuotaBytes":100`) {
+		t.Fatalf("set response = %d %s", response.Code, response.Body.String())
+	}
+	response = request(handler, `{"storageQuotaBytes":null}`, "verified-token", targetID)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"storageQuotaBytes":null`) || !strings.Contains(response.Body.String(), `"effectiveQuotaBytes":25`) {
+		t.Fatalf("reset response = %d %s", response.Code, response.Body.String())
+	}
+
+	tests := []struct {
+		name, body, token, target string
+		admin                     bool
+		storeErr                  error
+		want                      int
+	}{
+		{name: "unauthenticated", body: `{}`, target: targetID, admin: true, want: http.StatusUnauthorized},
+		{name: "non-admin", body: `{"storageQuotaBytes":100}`, token: "verified-token", target: targetID, want: http.StatusForbidden},
+		{name: "missing field", body: `{}`, token: "verified-token", target: targetID, admin: true, want: http.StatusUnprocessableEntity},
+		{name: "zero", body: `{"storageQuotaBytes":0}`, token: "verified-token", target: targetID, admin: true, want: http.StatusUnprocessableEntity},
+		{name: "negative", body: `{"storageQuotaBytes":-1}`, token: "verified-token", target: targetID, admin: true, want: http.StatusUnprocessableEntity},
+		{name: "malformed", body: `{"storageQuotaBytes":`, token: "verified-token", target: targetID, admin: true, want: http.StatusBadRequest},
+		{name: "trailing JSON", body: `{"storageQuotaBytes":1}{}`, token: "verified-token", target: targetID, admin: true, want: http.StatusBadRequest},
+		{name: "invalid target", body: `{"storageQuotaBytes":1}`, token: "verified-token", target: "bad-id", admin: true, want: http.StatusUnprocessableEntity},
+		{name: "missing target", body: `{"storageQuotaBytes":1}`, token: "verified-token", target: targetID, admin: true, storeErr: domain.ErrNotFound, want: http.StatusNotFound},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &userStore{quotaErr: test.storeErr}
+			response := request(newHandler(test.admin, store), test.body, test.token, test.target)
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d: %s", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestPersistentUploadUsesAuthenticatedOwner(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
@@ -203,7 +263,7 @@ func TestPersistentUploadUsesAuthenticatedOwner(t *testing.T) {
 	if listResponse.Code != http.StatusOK {
 		t.Fatalf("list status = %d, want 200: %s", listResponse.Code, listResponse.Body.String())
 	}
-	if !strings.Contains(listResponse.Body.String(), `"summary":{"fileCount":1,"totalBytes":5}`) {
+	if !strings.Contains(listResponse.Body.String(), `"summary":{"fileCount":1,"totalBytes":5,"accountTotalBytes":5,"quotaBytes":100}`) {
 		t.Fatalf("list response is missing storage summary: %s", listResponse.Body.String())
 	}
 
@@ -256,6 +316,7 @@ func (v tokenVerifier) VerifyIDToken(_ context.Context, token string) (identity.
 type userStore struct {
 	user      domain.User
 	updateErr error
+	quotaErr  error
 }
 
 func (s *userStore) UpsertUser(_ context.Context, user domain.User) (domain.User, error) {
@@ -284,6 +345,17 @@ func (s *userStore) UpdateCustomDisplayName(_ context.Context, userID string, di
 	return s.user, nil
 }
 
+func (s *userStore) UpdateStorageQuota(_ context.Context, userID string, quota *int64, defaultQuota int64) (domain.UserQuota, error) {
+	if s.quotaErr != nil {
+		return domain.UserQuota{}, s.quotaErr
+	}
+	effective := defaultQuota
+	if quota != nil {
+		effective = *quota
+	}
+	return domain.UserQuota{UserID: userID, StorageQuotaBytes: quota, EffectiveQuota: effective}, nil
+}
+
 type readiness struct{ err error }
 
 func (r readiness) Ping(context.Context) error { return r.err }
@@ -296,6 +368,18 @@ type handlerFileStore struct {
 func (s *handlerFileStore) CreateOwnedFile(_ context.Context, file domain.File) error {
 	s.file = file
 	return nil
+}
+
+func (s *handlerFileStore) CreateOwnedFileWithinQuota(_ context.Context, file domain.File, defaultQuota int64) error {
+	if file.SizeBytes > defaultQuota {
+		return domain.ErrQuotaExceeded
+	}
+	s.file = file
+	return nil
+}
+
+func (s *handlerFileStore) GetEffectiveStorageQuota(_ context.Context, _ string, defaultQuota int64) (int64, error) {
+	return defaultQuota, nil
 }
 
 func (s *handlerFileStore) GetOwnedFile(_ context.Context, ownerID, fileID string) (domain.File, error) {

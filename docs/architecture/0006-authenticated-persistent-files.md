@@ -13,7 +13,7 @@ Firebase authentication provisions an internal PostgreSQL user, but the anonymou
 - Add protected create, complete, list, download, delete, share-link creation, and share-link revocation routes under `/v1/files`.
 - Derive the owner exclusively from the verified Firebase request context. Never accept an owner ID from request JSON or query parameters.
 - Store persistent objects under `users/{ownerID}/files/{fileID}` and create file rows with `owner_id` set and `expires_at` null.
-- Allow persistent files up to 5 GiB each, enforced independently by the browser and API. Keep anonymous transfers at their separate 1 GiB combined limit.
+- Constrain persistent files by the uploader's remaining account quota, without a separate per-file product cap. Keep anonymous transfers at their separate 1 GiB combined limit.
 - Scope completion, listing, download, and deletion queries by both file ID and owner ID. A file owned by someone else resolves as not found.
 - Keep new persistent files private by default. Creating a persistent upload does not automatically create a share link.
 - Allow an owner to create one active public link per ready file with a 24-hour, 7-day, 30-day, or no-expiration lifetime. Serialize link creation on the file row so concurrent requests cannot create multiple active links.

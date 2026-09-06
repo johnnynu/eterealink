@@ -135,6 +135,28 @@ func TestFoldersEncodeAndValidateCursor(t *testing.T) {
 	}
 }
 
+func TestFolderSummaryPreservesFolderUsageAndReportsAccountCapacity(t *testing.T) {
+	store := &folderSummaryStore{
+		folderStoreStub: &folderStoreStub{contents: domain.FolderContents{
+			Summary: domain.FileLibrarySummary{FileCount: 4, TotalBytes: 384 * 1024 * 1024},
+		}},
+		accountUsage: domain.FileLibrarySummary{FileCount: 9, TotalBytes: 2 * 1024 * 1024 * 1024},
+		quota:        1024 * 1024 * 1024 * 1024,
+	}
+	folders := NewFolders(store, time.Now)
+
+	result, err := folders.Contents(context.Background(), "user-1", "folder-1", ListFolderInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary.FileCount != 4 || result.Summary.TotalBytes != 384*1024*1024 {
+		t.Fatalf("folder summary = %#v", result.Summary)
+	}
+	if result.Summary.AccountTotalBytes != 2*1024*1024*1024 || result.Summary.QuotaBytes != 1024*1024*1024*1024 {
+		t.Fatalf("account capacity = %#v", result.Summary)
+	}
+}
+
 type folderStoreStub struct {
 	created       domain.Folder
 	scope         string
@@ -163,8 +185,8 @@ func (s *folderStoreStub) GetRootContents(_ context.Context, _ string, scope str
 	return s.contents, s.hasMore, nil
 }
 
-func (*folderStoreStub) GetFolderContents(context.Context, string, string, time.Time, domain.FileLibraryQuery) (domain.FolderContents, bool, error) {
-	return domain.FolderContents{}, false, nil
+func (s *folderStoreStub) GetFolderContents(context.Context, string, string, time.Time, domain.FileLibraryQuery) (domain.FolderContents, bool, error) {
+	return s.contents, s.hasMore, nil
 }
 
 func (*folderStoreStub) UpdateFolder(_ context.Context, ownerID, folderID, name string, parentFolderID *string) (domain.Folder, error) {
@@ -213,4 +235,18 @@ func (s *folderStoreStub) AcceptFolderInvite(_ context.Context, _, code string, 
 	s.acceptedCode = code
 	s.acceptedAt = now
 	return domain.FolderAccess{}, nil
+}
+
+type folderSummaryStore struct {
+	*folderStoreStub
+	accountUsage domain.FileLibrarySummary
+	quota        int64
+}
+
+func (s *folderSummaryStore) GetOwnedFileUsage(context.Context, string) (domain.FileLibrarySummary, error) {
+	return s.accountUsage, nil
+}
+
+func (s *folderSummaryStore) GetEffectiveStorageQuota(context.Context, string, int64) (int64, error) {
+	return s.quota, nil
 }

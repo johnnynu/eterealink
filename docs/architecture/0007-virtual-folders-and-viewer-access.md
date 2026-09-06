@@ -18,7 +18,7 @@ Persistent files already belong to an internal user and use opaque Cloud Storage
 - Add viewers by normalized email only when that email already maps to an Eterealink user. Do not create invitation or placeholder identities in this phase.
 - Delete folders only when they contain no child folders or files. This prevents a folder operation from implicitly deleting or relocating user content.
 - Support bulk file moves in one transaction. Bulk file deletion continues using the existing object-first deletion path for each selected file so database rows never disappear before their storage objects.
-- Reserve persistent upload capacity atomically by locking the owner row and counting both pending and ready files before metadata is inserted. Default the account quota to 25 GiB and keep it configurable independently from the per-file limit.
+- Reserve persistent upload capacity atomically by locking the uploader row and counting both pending and ready files before metadata is inserted. Default the account quota to 25 GiB and allow positive per-user overrides.
 - Continue using opaque file IDs in storage keys, so duplicate filenames are safe and do not overwrite objects.
 - Execute folder-scoped filename search, active-link filtering, sorting, and pagination in PostgreSQL. Use opaque keyset cursors tied to the selected sort order so large libraries do not require loading or offset-scanning every file.
 

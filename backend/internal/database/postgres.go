@@ -86,10 +86,10 @@ func (p *Postgres) UpsertUser(ctx context.Context, user domain.User) (domain.Use
 		SET email = EXCLUDED.email, display_name = EXCLUDED.display_name
 		RETURNING id, firebase_uid, email,
 		          COALESCE(custom_display_name, NULLIF(BTRIM(display_name), ''), email),
-		          display_name, custom_display_name, created_at`,
+		          display_name, custom_display_name, storage_quota_bytes, is_admin, created_at`,
 		user.ID, user.FirebaseUID, user.Email, identityDisplayName, user.CreatedAt,
 	)
-	if err := row.Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.IdentityDisplayName, &user.CustomDisplayName, &user.CreatedAt); err != nil {
+	if err := row.Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.IdentityDisplayName, &user.CustomDisplayName, &user.StorageQuotaBytes, &user.IsAdmin, &user.CreatedAt); err != nil {
 		return domain.User{}, fmt.Errorf("upsert user: %w", err)
 	}
 	return user, nil
@@ -101,8 +101,8 @@ func (p *Postgres) UpdateCustomDisplayName(ctx context.Context, userID string, d
 		UPDATE users SET custom_display_name = $2 WHERE id = $1
 		RETURNING id, firebase_uid, email,
 		          COALESCE(custom_display_name, NULLIF(BTRIM(display_name), ''), email),
-		          display_name, custom_display_name, created_at`, userID, displayName).
-		Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.IdentityDisplayName, &user.CustomDisplayName, &user.CreatedAt)
+		          display_name, custom_display_name, storage_quota_bytes, is_admin, created_at`, userID, displayName).
+		Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.IdentityDisplayName, &user.CustomDisplayName, &user.StorageQuotaBytes, &user.IsAdmin, &user.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.User{}, domain.ErrNotFound
 	}
@@ -243,17 +243,23 @@ func (p *Postgres) CreateOwnedFileWithinQuota(ctx context.Context, file domain.F
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var ownerExists bool
-	if err := tx.QueryRow(ctx, `SELECT true FROM users WHERE id = $1 FOR UPDATE`, file.OwnerID).Scan(&ownerExists); errors.Is(err, pgx.ErrNoRows) {
+	var storageQuotaBytes *int64
+	if err := tx.QueryRow(ctx, `SELECT storage_quota_bytes FROM users WHERE id = $1 FOR UPDATE`, file.OwnerID).Scan(&storageQuotaBytes); errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrNotFound
 	} else if err != nil {
 		return fmt.Errorf("lock file owner: %w", err)
 	}
-	var reservedBytes int64
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(size_bytes), 0) FROM files WHERE owner_id = $1`, file.OwnerID).Scan(&reservedBytes); err != nil {
+	effectiveQuota := maxAccountBytes
+	if storageQuotaBytes != nil {
+		effectiveQuota = *storageQuotaBytes
+	}
+	var exceedsQuota bool
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(sum(size_bytes), 0)::numeric + $2::numeric > $3::numeric
+		FROM files WHERE owner_id = $1`, file.OwnerID, file.SizeBytes, effectiveQuota).Scan(&exceedsQuota); err != nil {
 		return fmt.Errorf("get reserved file usage: %w", err)
 	}
-	if reservedBytes > maxAccountBytes-file.SizeBytes {
+	if exceedsQuota {
 		return domain.ErrQuotaExceeded
 	}
 
@@ -401,10 +407,37 @@ func (p *Postgres) GetOwnedFileUsage(ctx context.Context, ownerID string) (domai
 	if err := p.pool.QueryRow(ctx, `
 		SELECT count(*), COALESCE(sum(size_bytes), 0)
 		FROM files
-		WHERE owner_id = $1 AND upload_status = 'READY'`, ownerID).Scan(&summary.FileCount, &summary.TotalBytes); err != nil {
+		WHERE owner_id = $1`, ownerID).Scan(&summary.FileCount, &summary.TotalBytes); err != nil {
 		return domain.FileLibrarySummary{}, fmt.Errorf("get owned file usage: %w", err)
 	}
 	return summary, nil
+}
+
+func (p *Postgres) GetEffectiveStorageQuota(ctx context.Context, userID string, defaultQuota int64) (int64, error) {
+	var quota int64
+	err := p.pool.QueryRow(ctx, `SELECT COALESCE(storage_quota_bytes, $2) FROM users WHERE id = $1`, userID, defaultQuota).Scan(&quota)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, domain.ErrNotFound
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get effective storage quota: %w", err)
+	}
+	return quota, nil
+}
+
+func (p *Postgres) UpdateStorageQuota(ctx context.Context, userID string, storageQuotaBytes *int64, defaultQuota int64) (domain.UserQuota, error) {
+	result := domain.UserQuota{UserID: userID, StorageQuotaBytes: storageQuotaBytes}
+	err := p.pool.QueryRow(ctx, `
+		UPDATE users SET storage_quota_bytes = $2 WHERE id = $1
+		RETURNING COALESCE(storage_quota_bytes, $3)`, userID, storageQuotaBytes, defaultQuota).
+		Scan(&result.EffectiveQuota)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.UserQuota{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.UserQuota{}, fmt.Errorf("update storage quota: %w", err)
+	}
+	return result, nil
 }
 
 func (p *Postgres) CreateOwnedFileShare(ctx context.Context, ownerID, fileID string, share domain.ShareLink, now time.Time) error {
@@ -679,9 +712,11 @@ func (p *Postgres) userByID(ctx context.Context, userID string) (domain.User, er
 	var user domain.User
 	err := p.pool.QueryRow(ctx, `
 		SELECT id, firebase_uid, email,
-		       COALESCE(custom_display_name, NULLIF(BTRIM(display_name), ''), email), created_at
+		       COALESCE(custom_display_name, NULLIF(BTRIM(display_name), ''), email),
+		       display_name, custom_display_name, storage_quota_bytes, is_admin, created_at
 		FROM users WHERE id = $1`, userID).
-		Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.CreatedAt)
+		Scan(&user.ID, &user.FirebaseUID, &user.Email, &user.DisplayName, &user.IdentityDisplayName,
+			&user.CustomDisplayName, &user.StorageQuotaBytes, &user.IsAdmin, &user.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.User{}, domain.ErrNotFound
 	}

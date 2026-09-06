@@ -38,7 +38,7 @@ Implemented:
 - Optional unique Eterealink display names with Google-name fallback, profile editing, and collaborator-facing realtime refreshes
 - Live end-to-end identity verification against the Eterealink Firebase project
 - Owner-scoped persistent uploads, file listing, authorized downloads, deletion, and revocable share links
-- A 5 GiB per-file limit for authenticated persistent uploads while anonymous transfers remain capped at 1 GiB combined
+- Authenticated uploads constrained by the account's remaining total storage; anonymous transfers remain capped at 1 GiB combined
 - Persistent-library storage totals, drag-and-drop, filename search, shared-file filtering, sorting, and bounded pagination
 - Signed-in `/app` workspace with a private file library and a separate 24-hour transfer flow
 - Nested virtual folders with URL-backed breadcrumbs that survive refresh and browser navigation, folder-scoped uploads, renaming, and empty-folder deletion
@@ -49,7 +49,8 @@ Implemented:
 - Owner-safe contribution removal that returns files to the uploader's private library
 - Multi-select file moves and deletion, including moves back to the library root
 - Persistent per-file upload queue with progress, cancel, retry, and independent failure handling
-- Atomic 25 GiB account storage quota enforcement, configurable independently from the 5 GiB per-file limit
+- Atomic 25 GiB default account storage quota enforcement with positive per-user overrides
+- Browser recovery for interrupted authenticated uploads after the user reselects the same local file
 - Short-lived inline preview targets for supported images, PDFs, video, audio, and text
 - Escaped text rendering, cross-origin PDF embedding, a server-side media allowlist, and generic fallback for unsupported files
 - Preview selection for multi-file transfers and an authenticated preview dialog for private or shared-folder files
@@ -58,6 +59,47 @@ Implemented:
 - A health-gated Docker Compose stack that runs PostgreSQL, one-shot migrations, the API, and the frontend in dependency order
 - Immutable API and frontend images in Artifact Registry, one-shot Cloud Run migration executions, and public scale-to-zero Cloud Run services
 - A transitional zonal Cloud SQL PostgreSQL database reached through the managed Cloud SQL connector with its connection string stored in Secret Manager
+
+### Per-user storage quotas
+
+Authenticated accounts receive a 25 GiB total quota by default. Pending and completed files both consume quota, including files uploaded into a shared folder by a contributor. There is no separate authenticated per-file product cap; a positive file size is accepted when it fits in the uploader's remaining quota. Anonymous transfers keep their existing 1 GiB combined, 10-file, 24-hour limits.
+
+Bootstrap the first administrator once through PostgreSQL:
+
+```sql
+UPDATE users
+SET is_admin = true
+WHERE email = 'owner@example.com';
+```
+
+An administrator can set or reset an override through `PATCH /v1/admin/users/{userID}/quota` with a Firebase bearer token:
+
+```bash
+curl -X PATCH "https://eterealink.com/api/v1/admin/users/USER_UUID/quota" \
+  -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"storageQuotaBytes":107374182400}'
+
+curl -X PATCH "https://eterealink.com/api/v1/admin/users/USER_UUID/quota" \
+  -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"storageQuotaBytes":1099511627776}'
+
+curl -X PATCH "https://eterealink.com/api/v1/admin/users/USER_UUID/quota" \
+  -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"storageQuotaBytes":null}'
+```
+
+The endpoint returns the target user ID, stored override (including `null`), and effective quota. Equivalent SQL examples are:
+
+```sql
+UPDATE users SET storage_quota_bytes = 107374182400 WHERE email = 'friend@example.com';
+UPDATE users SET storage_quota_bytes = 1099511627776 WHERE email = 'owner@example.com';
+UPDATE users SET storage_quota_bytes = NULL WHERE email = 'friend@example.com';
+```
+
+Authenticated resumable sessions are retained in IndexedDB after initiation. After a reload, the library asks the signed-in user to reselect the same file and checks its name, size, modified time, and MIME type before querying GCS for the confirmed offset. The file itself is never stored in IndexedDB. A completed upload whose backend completion call failed can retry completion without sending the bytes again.
 
 The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
 
@@ -155,8 +197,9 @@ An anonymous transfer follows this path:
 | `GET` | `/readyz` | Database-aware readiness |
 | `GET` | `/v1/me` | Verify a Firebase bearer token and return the provisioned user |
 | `PATCH` | `/v1/me` | Set or clear the authenticated user's optional unique Eterealink display name |
+| `PATCH` | `/v1/admin/users/{userID}/quota` | Set or reset a user's storage quota as a database-authorized administrator |
 | `POST` | `/v1/files` | Create owner-linked persistent file metadata and an upload target |
-| `GET` | `/v1/files` | List the authenticated user's ready files and aggregate storage usage |
+| `GET` | `/v1/files` | List the authenticated user's ready files and aggregate pending-plus-ready storage usage |
 | `POST` | `/v1/files/{id}/complete` | Verify and complete an owned persistent upload |
 | `GET` | `/v1/files/{id}/download` | Create short-lived download and optional safe preview targets for an owned file or a file inherited through folder membership |
 | `POST` | `/v1/files/{id}/shares` | Create an expiring or non-expiring public link for an owned file |

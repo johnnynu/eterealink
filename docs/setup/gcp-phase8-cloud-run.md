@@ -36,6 +36,16 @@ Both Cloud Run services use a five-minute request timeout so the frontend proxy 
 
 Defaults can be overridden with environment variables such as `PROJECT_ID`, `REGION`, `SERVICE`, `DB_INSTANCE`, and `GCS_BUCKET`.
 
+After the quota migration is deployed, bootstrap the first administrator once through Cloud SQL:
+
+```sql
+UPDATE users
+SET is_admin = true
+WHERE email = 'owner@example.com';
+```
+
+Do not place an administrator email in application configuration. Future quota changes use the authenticated `PATCH /v1/admin/users/{userID}/quota` endpoint. Authenticated accounts default to 25 GiB total storage; positive per-user overrides are stored in bytes, and `NULL` restores the default.
+
 `API_IMAGE_TAG` and `FRONTEND_IMAGE_TAG` can independently reuse a previously published immutable image when a committed change affects only one container.
 
 ## Custom domain

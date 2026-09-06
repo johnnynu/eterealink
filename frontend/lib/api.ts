@@ -371,7 +371,7 @@ function uploadedOffset(response: Response): number | null {
   return match ? Number(match[1]) + 1 : null;
 }
 
-async function resumableOffset(sessionURL: string, size: number, signal: AbortSignal): Promise<number> {
+export async function resumableOffset(sessionURL: string, size: number, signal: AbortSignal): Promise<number> {
   const response = await fetch(sessionURL, {
     method: "PUT",
     headers: { "Content-Range": `bytes */${size}` },
@@ -387,6 +387,10 @@ export function uploadResumable(
   file: File,
   target: UploadTarget,
   onProgress: (percent: number) => void,
+  callbacks: {
+    onSession?: (sessionURL: string) => void | Promise<void>;
+    onConfirmedOffset?: (offset: number) => void | Promise<void>;
+  } = {},
 ): { promise: Promise<void>; abort: () => void } {
   const controller = new AbortController();
   const promise = (async () => {
@@ -399,56 +403,91 @@ export function uploadResumable(
     if (!initiation.ok) throw new APIError("Cloud Storage could not start the resumable upload.", initiation.status);
     const sessionURL = initiation.headers.get("Location");
     if (!sessionURL) throw new APIError("Cloud Storage did not return an upload session.", initiation.status);
+    await callbacks.onSession?.(sessionURL);
+    await uploadResumableSession(file, sessionURL, onProgress, controller.signal, 0, callbacks.onConfirmedOffset);
+  })();
+  return { promise, abort: () => controller.abort() };
+}
 
-    const chunkSize = 8 * 1024 * 1024;
-    let offset = 0;
-    while (offset < file.size) {
-      const end = Math.min(offset + chunkSize, file.size);
-      let completedChunk = false;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          const response = await fetch(sessionURL, {
-            method: "PUT",
-            headers: {
-              "Content-Type": file.type || "application/octet-stream",
-              "Content-Range": `bytes ${offset}-${end - 1}/${file.size}`,
-            },
-            body: file.slice(offset, end),
-            signal: controller.signal,
-          });
-          if (response.status === 308) {
-            offset = uploadedOffset(response) ?? end;
-            onProgress(Math.round((offset / file.size) * 100));
-            completedChunk = true;
-            break;
-          }
-          if (response.ok && end === file.size) {
-            onProgress(100);
-            return;
-          }
-          if (response.status !== 429 && response.status < 500) {
-            throw new APIError("Cloud Storage rejected an upload chunk.", response.status);
-          }
-        } catch (error) {
-          if (controller.signal.aborted) throw error;
-          if (error instanceof APIError && error.status > 0 && error.status !== 429 && error.status < 500) throw error;
-        }
+async function uploadResumableSession(
+  file: File,
+  sessionURL: string,
+  onProgress: (percent: number) => void,
+  signal: AbortSignal,
+  initialOffset: number,
+  onConfirmedOffset?: (offset: number) => void | Promise<void>,
+) {
+  const chunkSize = 8 * 1024 * 1024;
+  let offset = initialOffset;
+  if (offset > 0) onProgress(Math.round((offset / file.size) * 100));
 
-        try {
-          offset = await resumableOffset(sessionURL, file.size, controller.signal);
-        } catch (error) {
-          if (controller.signal.aborted || attempt === 2) throw error;
-          continue;
-        }
-        onProgress(Math.round((offset / file.size) * 100));
-        if (offset >= file.size) return;
-        if (offset >= end) {
+  while (offset < file.size) {
+    const end = Math.min(offset + chunkSize, file.size);
+    let completedChunk = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = await fetch(sessionURL, {
+          method: "PUT",
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+            "Content-Range": `bytes ${offset}-${end - 1}/${file.size}`,
+          },
+          body: file.slice(offset, end),
+          signal,
+        });
+        if (response.status === 308) {
+          offset = uploadedOffset(response) ?? end;
+          onProgress(Math.round((offset / file.size) * 100));
+          await onConfirmedOffset?.(offset);
           completedChunk = true;
           break;
         }
+        if (response.ok && end === file.size) {
+          onProgress(100);
+          await onConfirmedOffset?.(file.size);
+          return;
+        }
+        if (response.status !== 429 && response.status < 500) {
+          throw new APIError("Cloud Storage rejected an upload chunk.", response.status);
+        }
+      } catch (error) {
+        if (signal.aborted) throw error;
+        if (error instanceof APIError && error.status > 0 && error.status !== 429 && error.status < 500) throw error;
       }
-      if (!completedChunk) throw new APIError("The upload was interrupted after three attempts.", 0);
+
+      try {
+        offset = await resumableOffset(sessionURL, file.size, signal);
+      } catch (error) {
+        if (signal.aborted || attempt === 2) throw error;
+        continue;
+      }
+      onProgress(Math.round((offset / file.size) * 100));
+      await onConfirmedOffset?.(offset);
+      if (offset >= file.size) return;
+      if (offset >= end) {
+        completedChunk = true;
+        break;
+      }
     }
+    if (!completedChunk) throw new APIError("The upload was interrupted after three attempts.", 0);
+  }
+}
+
+export function resumeResumableUpload(
+  file: File,
+  sessionURL: string,
+  onProgress: (percent: number) => void,
+  onConfirmedOffset?: (offset: number) => void | Promise<void>,
+): { promise: Promise<void>; abort: () => void } {
+  const controller = new AbortController();
+  const promise = (async () => {
+    const offset = await resumableOffset(sessionURL, file.size, controller.signal);
+    await onConfirmedOffset?.(offset);
+    if (offset >= file.size) {
+      onProgress(100);
+      return;
+    }
+    await uploadResumableSession(file, sessionURL, onProgress, controller.signal, offset, onConfirmedOffset);
   })();
   return { promise, abort: () => controller.abort() };
 }

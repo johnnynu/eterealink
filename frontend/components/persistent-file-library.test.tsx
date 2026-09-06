@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PersistentFileLibrary } from "./persistent-file-library";
 import type { FileRecord } from "@/lib/types";
+import type { UploadRecoveryRecord } from "@/lib/upload-recovery";
 import { PROFILE_UPDATE_FINISHED_EVENT, PROFILE_UPDATE_STARTED_EVENT } from "@/lib/events";
 
 const api = vi.hoisted(() => ({
@@ -23,19 +24,28 @@ const api = vi.hoisted(() => ({
 	removeContributedFile: vi.fn(),
 	removeFolderMember: vi.fn(),
 	revokeFolderInvite: vi.fn(),
-  revokePersistentFileShare: vi.fn(),
+	revokePersistentFileShare: vi.fn(),
+	resumeResumableUpload: vi.fn(),
 	streamFolderEvents: vi.fn(),
   uploadResumable: vi.fn(),
 	updateFolder: vi.fn(),
 }));
 const getIDToken = vi.hoisted(() => vi.fn(async () => "verified-token"));
 const signedInUser = vi.hoisted(() => ({ id: "user-1", email: "me@example.com", displayName: "Me", createdAt: "2026-09-03T12:00:00Z" }));
+const recovery = vi.hoisted(() => ({
+	deleteUploadRecovery: vi.fn(async () => true),
+	listUploadRecoveries: vi.fn(async (): Promise<UploadRecoveryRecord[]> => []),
+	matchesRecoveryFile: vi.fn(() => true),
+	saveUploadRecovery: vi.fn(async () => true),
+	updateUploadRecovery: vi.fn(async (record, update) => ({ ...record, ...update, updatedAt: Date.now() })),
+}));
 
 vi.mock("@/components/auth-context", () => ({ useAuth: () => ({ getIDToken, user: signedInUser }) }));
 vi.mock("@/lib/api", () => ({
   APIError: class APIError extends Error {},
   ...api,
 }));
+vi.mock("@/lib/upload-recovery", () => recovery);
 
 const savedFile: FileRecord = {
   id: "file-1",
@@ -49,7 +59,7 @@ const savedFile: FileRecord = {
 };
 const mounted: Array<{ container: HTMLDivElement; unmount: () => void }> = [];
 
-function library(files: Array<{ file: FileRecord; uploaderName?: string; share?: object; sharePath?: string }>) {
+function library(files: Array<{ file: FileRecord; uploaderName?: string; share?: object; sharePath?: string }>, quotaBytes?: number) {
   return {
     files,
 	folders: [],
@@ -58,6 +68,7 @@ function library(files: Array<{ file: FileRecord; uploaderName?: string; share?:
     summary: {
       fileCount: files.length,
       totalBytes: files.reduce((total, entry) => total + entry.file.sizeBytes, 0),
+	  quotaBytes,
     },
   };
 }
@@ -154,6 +165,97 @@ describe("PersistentFileLibrary", () => {
     expect(api.completePersistentUpload).toHaveBeenCalledWith("file-1", "verified-token");
     expect(container.textContent).toContain("project-notes.txt");
   });
+
+	it("does not apply the former 5 GiB authenticated per-file cap", async () => {
+		api.listFolderContents.mockResolvedValue(library([], 10 * 1024 ** 3));
+		const large = new File(["x"], "archive.bin", { type: "application/octet-stream", lastModified: 100 });
+		Object.defineProperty(large, "size", { configurable: true, value: 6 * 1024 ** 3 });
+		api.createPersistentUpload.mockResolvedValue({
+			file: { ...savedFile, id: "large-file", originalName: large.name, sizeBytes: large.size, status: "PENDING" },
+			uploadTarget: { url: "https://upload.invalid", method: "POST", headers: {}, expiresAt: "soon" },
+		});
+		api.uploadResumable.mockReturnValue({ promise: Promise.resolve(), abort: vi.fn() });
+		api.completePersistentUpload.mockResolvedValue({ ...savedFile, id: "large-file" });
+		const container = await renderLibrary();
+		const input = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [large] });
+		await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+		expect(api.createPersistentUpload).toHaveBeenCalledWith(large, "verified-token", undefined);
+	});
+
+	it("rejects a selected batch that exceeds remaining account capacity", async () => {
+		const state = library([{ file: { ...savedFile, sizeBytes: 8 } }], 10);
+		api.listFolderContents.mockResolvedValue(state);
+		const container = await renderLibrary();
+		const input = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [new File(["abc"], "more.txt")] });
+		await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+		expect(api.createPersistentUpload).not.toHaveBeenCalled();
+		expect(container.textContent).toContain("2 B remaining");
+	});
+
+	it("stores resumable recovery after initiation and removes it only after completion", async () => {
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		api.createPersistentUpload.mockResolvedValue({
+			file: { ...savedFile, status: "PENDING" },
+			uploadTarget: { url: "https://upload.invalid/start", method: "POST", headers: {}, expiresAt: "soon" },
+		});
+		api.uploadResumable.mockImplementation((_file, _target, _progress, callbacks) => ({
+			promise: (async () => {
+				await callbacks.onSession("https://upload.invalid/private-session");
+				await callbacks.onConfirmedOffset(5);
+			})(),
+			abort: vi.fn(),
+		}));
+		api.completePersistentUpload.mockResolvedValue(savedFile);
+		const container = await renderLibrary();
+		const input = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [new File(["hello"], "project-notes.txt", { type: "text/plain", lastModified: 100 })] });
+		await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+		expect(recovery.saveUploadRecovery).toHaveBeenCalledWith(expect.objectContaining({
+			fileId: "file-1", userId: "user-1", sessionUrl: "https://upload.invalid/private-session",
+		}));
+		expect(recovery.updateUploadRecovery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ confirmedOffset: 5 }));
+		expect(recovery.deleteUploadRecovery).toHaveBeenCalledWith("file-1");
+		expect(container.textContent).not.toContain("private-session");
+	});
+
+	it("rejects a mismatched recovery reselection", async () => {
+		recovery.listUploadRecoveries.mockResolvedValueOnce([{
+			fileId: "pending-1", userId: "user-1", sessionUrl: "https://upload.invalid/private",
+			fileName: "same.txt", fileSize: 5, mimeType: "text/plain", lastModified: 100,
+			confirmedOffset: 2, completionPending: false, createdAt: 1, updatedAt: 1,
+		}]);
+		recovery.matchesRecoveryFile.mockReturnValueOnce(false);
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		const container = await renderLibrary();
+		await act(async () => { await Promise.resolve(); });
+		const input = container.querySelector<HTMLInputElement>(".upload-recovery-item input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [new File(["other"], "same.txt")] });
+		await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+		expect(api.resumeResumableUpload).not.toHaveBeenCalled();
+		expect(container.textContent).toContain("name, size, modified date, and type must match");
+	});
+
+	it("preserves completion-only recovery after failure and allows explicit discard", async () => {
+		recovery.listUploadRecoveries.mockResolvedValueOnce([{
+			fileId: "pending-1", userId: "user-1", sessionUrl: "https://upload.invalid/private",
+			fileName: "same.txt", fileSize: 5, mimeType: "text/plain", lastModified: 100,
+			confirmedOffset: 5, completionPending: true, createdAt: 1, updatedAt: 1,
+		}]);
+		api.listFolderContents.mockResolvedValue(library([], 100));
+		api.completePersistentUpload.mockRejectedValueOnce(new Error("temporarily unavailable"));
+		const container = await renderLibrary();
+		await act(async () => { await Promise.resolve(); });
+		const retry = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Retry completion")!;
+		await act(async () => { retry.click(); });
+		expect(recovery.deleteUploadRecovery).not.toHaveBeenCalled();
+		expect(container.textContent).toContain("Upload stored · completion pending");
+		const discard = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Discard local recovery")!;
+		await act(async () => { discard.click(); });
+		expect(recovery.deleteUploadRecovery).toHaveBeenCalledWith("pending-1");
+		expect(container.textContent).not.toContain("Upload stored · completion pending");
+	});
 
   it("accepts files dropped onto the persistent library", async () => {
 	api.listFolderContents.mockResolvedValueOnce(library([])).mockResolvedValueOnce(library([{ file: savedFile }]));
@@ -282,6 +384,35 @@ describe("PersistentFileLibrary", () => {
 	});
     expect(container.textContent).toContain("No files found.");
   });
+
+	it("shows remaining and total account capacity", async () => {
+		api.listFolderContents.mockResolvedValue(library([{ file: { ...savedFile, sizeBytes: 25 } }], 100));
+		const container = await renderLibrary();
+
+		expect(container.textContent).toContain("75 B remaining of 100 B total");
+		expect(container.querySelector(".storage-capacity")?.getAttribute("title")).toBe("25 B of 100 B used");
+	});
+
+	it("shows folder usage separately from account capacity", async () => {
+		const folder = {
+			folder: { id: "folder-1", ownerId: "user-1", name: "Team assets", createdAt: "2026-09-04T12:00:00Z" },
+			role: "OWNER" as const,
+			owner: signedInUser,
+		};
+		window.history.replaceState(null, "", "/app?folder=folder-1");
+		api.listFolderContents.mockResolvedValue({
+			...library([]),
+			current: folder,
+			breadcrumbs: [folder.folder],
+			summary: { fileCount: 4, totalBytes: 384 * 1024 ** 2, accountTotalBytes: 25, quotaBytes: 100 },
+		});
+
+		const container = await renderLibrary();
+
+		expect(container.textContent).toContain("4 files · 384.0 MB in this folder");
+		expect(container.textContent).toContain("Your account: 75 B remaining of 100 B total");
+		expect(container.querySelector(".storage-capacity")?.getAttribute("title")).toBe("25 B of 100 B used");
+	});
 
 	it("creates a folder and refreshes the active location", async () => {
 		api.listFolderContents.mockResolvedValue(library([]));

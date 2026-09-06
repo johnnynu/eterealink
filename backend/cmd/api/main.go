@@ -52,9 +52,9 @@ func run(logger *slog.Logger) error {
 		storageBackend = gcsBackend
 	}
 	transfers := service.NewTransfers(db, storageBackend, time.Now, cfg.AnonymousFileTTL, cfg.SignedURLTTL, cfg.MaxAnonymousFileBytes)
-	files := service.NewFiles(db, storageBackend, time.Now, cfg.SignedURLTTL, cfg.MaxPersistentFileBytes, cfg.MaxPersistentStorageBytes)
+	files := service.NewFiles(db, storageBackend, time.Now, cfg.SignedURLTTL, cfg.MaxPersistentStorageBytes)
 	folders := service.NewFolders(db, time.Now, cfg.MaxPersistentStorageBytes)
-	users := service.NewUsers(db, time.Now)
+	users := service.NewUsers(db, time.Now, cfg.MaxPersistentStorageBytes)
 	var tokenVerifier identity.Verifier
 	if cfg.FirebaseProjectID != "" {
 		tokenVerifier, err = identity.NewFirebaseVerifier(startupContext, cfg.FirebaseProjectID)
@@ -78,14 +78,14 @@ func run(logger *slog.Logger) error {
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           api.NewHandlerWithRealtime(transfers, bundles, files, users, tokenVerifier, db, logger, folders, folderEvents),
-		BaseContext:        func(net.Listener) context.Context { return workerContext },
+		BaseContext:       func(net.Listener) context.Context { return workerContext },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		// Folder event streams rotate after 4m30s, just below the Cloud Run
 		// request timeout. Keep the server write window long enough for the
 		// stream to finish cleanly while retaining a finite upper bound.
 		WriteTimeout: 5 * time.Minute,
-		IdleTimeout:       60 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	serverErrors := make(chan error, 1)
