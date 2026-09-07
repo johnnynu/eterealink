@@ -278,6 +278,7 @@ gcloud run deploy "${FRONTEND_SERVICE}" \
 	--region="${REGION}" \
 	--image="${frontend_image_uri}" \
 	--service-account="${FRONTEND_SERVICE_ACCOUNT}" \
+	--set-env-vars="API_BASE_URL=${api_public_url}" \
 	--port=3000 \
 	--cpu=1 \
 	--memory=512Mi \

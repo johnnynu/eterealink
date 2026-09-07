@@ -4,6 +4,7 @@ import { SiteHeader } from "@/components/site-header";
 import "./globals.css";
 
 export const metadata: Metadata = {
+	metadataBase: new URL("https://eterealink.com"),
   title: { default: "Eterealink — Share a file simply", template: "%s · Eterealink" },
   description: "Share files without an account using 24-hour links. Sign in for a private file library, folders, collaboration, and control over your share links.",
 };
