@@ -301,6 +301,8 @@ func (h *Handler) createPersistentFile(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "not_found", "destination folder was not found")
 		case errors.Is(err, domain.ErrConflict):
 			writeError(w, http.StatusConflict, "name_conflict", "a file with this name already exists in the folder")
+		case errors.Is(err, domain.ErrPendingUpload):
+			writeError(w, http.StatusConflict, "upload_already_pending", "a matching upload is already pending; resume or delete it before starting another copy")
 		case errors.Is(err, service.ErrStorageQuotaExceeded):
 			writeError(w, http.StatusConflict, "storage_quota_exceeded", err.Error())
 		default:

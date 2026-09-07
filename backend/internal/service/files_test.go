@@ -134,6 +134,18 @@ func TestPersistentFileEnforcesAccountQuotaAndAssignsFolder(t *testing.T) {
 	}
 }
 
+func TestPersistentFileRejectsMatchingPendingUpload(t *testing.T) {
+	store := newOwnedFileStore()
+	files := NewFiles(store, &ownedFileBackend{}, time.Now, 15*time.Minute, 100)
+	input := CreateFileUploadInput{OriginalName: "large.mov", MIMEType: "video/quicktime", SizeBytes: 40, FolderID: nil}
+	if _, err := files.CreateUpload(context.Background(), "user-1", input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := files.CreateUpload(context.Background(), "user-1", input); !errors.Is(err, domain.ErrPendingUpload) {
+		t.Fatalf("duplicate pending upload error = %v", err)
+	}
+}
+
 func TestPersistentFileUsesLargerPerUserQuotaOverride(t *testing.T) {
 	store := newOwnedFileStore()
 	override := int64(20)
@@ -177,6 +189,9 @@ func (s *ownedFileStore) CreateOwnedFileWithinQuota(_ context.Context, file doma
 	var reserved int64
 	for _, existing := range s.files {
 		if existing.OwnerID != nil && file.OwnerID != nil && *existing.OwnerID == *file.OwnerID {
+			if existing.Status == domain.FileStatusPending && existing.OriginalName == file.OriginalName && existing.SizeBytes == file.SizeBytes && optionalIDsEqual(existing.FolderID, file.FolderID) {
+				return domain.ErrPendingUpload
+			}
 			reserved += existing.SizeBytes
 		}
 	}
@@ -185,6 +200,13 @@ func (s *ownedFileStore) CreateOwnedFileWithinQuota(_ context.Context, file doma
 	}
 	s.files[file.ID] = file
 	return nil
+}
+
+func optionalIDsEqual(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func (s *ownedFileStore) GetEffectiveStorageQuota(_ context.Context, _ string, defaultQuota int64) (int64, error) {

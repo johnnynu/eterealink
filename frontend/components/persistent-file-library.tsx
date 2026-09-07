@@ -123,6 +123,12 @@ function uploadStatus(item: UploadQueueItem) {
 	return `Uploading · ${details.join(" · ")}`;
 }
 
+function pendingUploadMatchesFile(pending: FileRecord, file: File, folderID?: string) {
+	return pending.originalName === file.name
+		&& pending.sizeBytes === file.size
+		&& pending.folderId === folderID;
+}
+
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof APIError ? error.message : fallback;
 }
@@ -154,11 +160,12 @@ function folderSnapshot(
 	breadcrumbs: FolderRecord[],
 	folders: FolderAccess[],
 	files: OwnedFileRecord[] | null,
+	pendingFiles: FileRecord[],
 	summary: FileLibrarySummary | null,
 	totalCount: number,
 	nextCursor: string,
 ) {
-	return JSON.stringify({ current, breadcrumbs, folders, files, summary, totalCount, nextCursor });
+	return JSON.stringify({ current, breadcrumbs, folders, files, pendingFiles, summary, totalCount, nextCursor });
 }
 
 function folderAccessSnapshot(members: FolderMember[], invites: FolderInvite[]) {
@@ -168,6 +175,7 @@ function folderAccessSnapshot(members: FolderMember[], invites: FolderInvite[]) 
 export function PersistentFileLibrary() {
   const { getIDToken, user } = useAuth();
   const [files, setFiles] = useState<OwnedFileRecord[] | null>(null);
+	const [pendingUploads, setPendingUploads] = useState<FileRecord[]>([]);
   const [summary, setSummary] = useState<FileLibrarySummary | null>(null);
 	const [totalCount, setTotalCount] = useState(0);
   const [error, setError] = useState("");
@@ -250,12 +258,15 @@ export function PersistentFileLibrary() {
 		memberPanelOpen,
 		role: currentFolder?.role,
 	};
-	displayedFolderSnapshot.current = folderSnapshot(currentFolder, breadcrumbs, folders, files, summary, totalCount, nextCursor);
+	displayedFolderSnapshot.current = folderSnapshot(currentFolder, breadcrumbs, folders, files, pendingUploads, summary, totalCount, nextCursor);
 	displayedAccessSnapshot.current = folderAccessSnapshot(members, folderInvites);
 	const canUpload = scope === "owned" || (scope === "shared" && currentFolder?.role === "CONTRIBUTOR");
 	const uploadBusy = uploading || Boolean(recoveringID) || Boolean(deletingRecoveryID);
 	const visibleRecoveries = recoveries.filter((record) => record.userId === user?.id
 		&& !uploadQueue.some((item) => item.fileId === record.fileId));
+	const visibleServerPending = pendingUploads.filter((file) =>
+		!recoveries.some((record) => record.fileId === file.id)
+		&& !uploadQueue.some((item) => item.fileId === file.id));
 
 	useEffect(() => {
 		let active = true;
@@ -304,6 +315,7 @@ export function PersistentFileLibrary() {
 		if (!result) result = await listFolderContents(token, undefined, initialScope, { sort: "newest", limit: FILES_PER_PAGE });
         if (active) {
           setFiles(result.files);
+			setPendingUploads(result.pendingFiles ?? []);
 			setFolders(result.folders);
 			setBreadcrumbs(result.breadcrumbs);
 			setCurrentFolder(result.current ?? null);
@@ -321,6 +333,7 @@ export function PersistentFileLibrary() {
       } catch (loadError) {
         if (active) {
           setFiles([]);
+		  setPendingUploads([]);
           setSummary({ fileCount: 0, totalBytes: 0 });
 			setTotalCount(0);
           setError(errorMessage(loadError, "Your files could not be loaded. Please try again."));
@@ -375,6 +388,7 @@ export function PersistentFileLibrary() {
 			setBreadcrumbs(result.breadcrumbs ?? []);
 			setFolders(result.folders ?? []);
 			setFiles(result.files ?? []);
+			setPendingUploads(result.pendingFiles ?? []);
 			setSummary(result.summary ?? { fileCount: 0, totalBytes: 0 });
 			setTotalCount(result.totalCount ?? result.files?.length ?? 0);
 			setNextCursor(result.nextCursor ?? "");
@@ -392,6 +406,7 @@ export function PersistentFileLibrary() {
 		} catch (loadError) {
 			if (requestVersion !== locationVersion.current) return;
 			setFiles([]);
+			setPendingUploads([]);
 			setFolders([]);
 			setTotalCount(0);
 			setError(errorMessage(loadError, "This folder could not be loaded. Please try again."));
@@ -424,6 +439,7 @@ export function PersistentFileLibrary() {
 			const nextBreadcrumbs = result.breadcrumbs ?? [];
 			const nextFolders = result.folders ?? [];
 			const nextFiles = result.files ?? [];
+			const nextPendingFiles = result.pendingFiles ?? [];
 			const nextSummary = result.summary ?? { fileCount: 0, totalBytes: 0 };
 			const nextTotalCount = result.totalCount ?? nextFiles.length;
 			const nextPageCursor = result.nextCursor ?? "";
@@ -432,6 +448,7 @@ export function PersistentFileLibrary() {
 				nextBreadcrumbs,
 				nextFolders,
 				nextFiles,
+				nextPendingFiles,
 				nextSummary,
 				nextTotalCount,
 				nextPageCursor,
@@ -441,6 +458,7 @@ export function PersistentFileLibrary() {
 			setBreadcrumbs(nextBreadcrumbs);
 			setFolders(nextFolders);
 			setFiles(nextFiles);
+			setPendingUploads(nextPendingFiles);
 			setSummary(nextSummary);
 			setTotalCount(nextTotalCount);
 			setNextCursor(nextPageCursor);
@@ -793,6 +811,16 @@ export function PersistentFileLibrary() {
       setError("Each file must contain data.");
       return;
     }
+	const conflictingFile = selected.find((file) =>
+		recoveries.some((record) => record.userId === uploadUserID
+			&& record.fileName === file.name
+			&& record.fileSize === file.size
+			&& matchesRecoveryFile(record, file))
+		|| pendingUploads.some((pending) => pendingUploadMatchesFile(pending, file, currentFolder?.folder.id)));
+	if (conflictingFile) {
+		setError(`A pending upload for ${conflictingFile.name} already reserves storage. Resume it or delete the pending upload before starting another copy.`);
+		return;
+	}
 	const selectedBytes = selected.reduce((total, file) => total + file.size, 0);
 	if (summary?.quotaBytes !== undefined) {
 		const accountTotalBytes = summary.accountTotalBytes ?? summary.totalBytes;
@@ -831,6 +859,7 @@ export function PersistentFileLibrary() {
 		try {
 			const created = await createPersistentUpload(file, token, currentFolder?.folder.id);
 			pendingID = created.file.id;
+			setPendingUploads((current) => [created.file, ...current.filter((pending) => pending.id !== created.file.id)]);
 			const startedAt = currentUploadTime();
 			setUploadQueue((current) => current.map((queued) => queued.id === item.id ? {
 				...queued,
@@ -885,6 +914,7 @@ export function PersistentFileLibrary() {
 				setRecoveries((current) => current.map((entry) => entry.fileId === recovery!.fileId ? recovery! : entry));
 			}
 			completed.push(await completePersistentUpload(created.file.id, token));
+			setPendingUploads((current) => current.filter((pending) => pending.id !== created.file.id));
 			if (recoveryPersisted) {
 				await deleteUploadRecovery(created.file.id);
 				setRecoveries((current) => current.filter((entry) => entry.fileId !== created.file.id));
@@ -903,7 +933,10 @@ export function PersistentFileLibrary() {
 				recoverable: recoveryPersisted,
 			} : queued));
 			if (pendingID && !recoveryPersisted) {
-				try { await deletePersistentFile(pendingID, token); } catch { /* hidden pending metadata is cleaned up later */ }
+				try {
+					await deletePersistentFile(pendingID, token);
+					setPendingUploads((current) => current.filter((pending) => pending.id !== pendingID));
+				} catch { /* the visible pending upload can be deleted from the recovery section */ }
 			}
 		} finally {
 			pendingPauseIDs.current.delete(item.id);
@@ -977,6 +1010,7 @@ export function PersistentFileLibrary() {
 			await completePersistentUpload(record.fileId, token);
 			await deleteUploadRecovery(record.fileId);
 			setRecoveries((items) => items.filter((item) => item.fileId !== record.fileId));
+			setPendingUploads((items) => items.filter((item) => item.id !== record.fileId));
 			setUploadQueue((items) => items.map((item) => item.id === queueItemID ? {
 				...applyUploadProgress(item, record.fileSize),
 				status: "complete",
@@ -1013,7 +1047,7 @@ export function PersistentFileLibrary() {
 		}));
 	}
 
-	async function deleteRecoveredUpload(record: UploadRecoveryRecord) {
+	async function deleteRecoveredUpload(record: { fileId: string; fileSize?: number }) {
 		if (uploadOperation.current) return;
 		uploadOperation.current = `delete-${record.fileId}`;
 		setDeletingRecoveryID(record.fileId);
@@ -1028,6 +1062,17 @@ export function PersistentFileLibrary() {
 			await deleteUploadRecovery(record.fileId);
 			setRecoveries((items) => items.filter((item) => item.fileId !== record.fileId));
 			setUploadQueue((items) => items.filter((item) => item.fileId !== record.fileId));
+			const pending = pendingUploads.find((item) => item.id === record.fileId);
+			const removedBytes = pending?.sizeBytes ?? record.fileSize ?? 0;
+			setPendingUploads((items) => items.filter((item) => item.id !== record.fileId));
+			setSummary((current) => current ? {
+				...current,
+				fileCount: !currentFolder && scope === "owned" ? Math.max(0, current.fileCount - 1) : current.fileCount,
+				totalBytes: !currentFolder && scope === "owned" ? Math.max(0, current.totalBytes - removedBytes) : current.totalBytes,
+				accountTotalBytes: Math.max(0, (current.accountTotalBytes ?? current.totalBytes) - removedBytes),
+				pendingFileCount: Math.max(0, (current.pendingFileCount ?? 1) - 1),
+				pendingBytes: Math.max(0, (current.pendingBytes ?? removedBytes) - removedBytes),
+			} : current);
 			setConfirmDeleteRecoveryID("");
 		} catch (deleteError) {
 			setError(errorMessage(deleteError, "The pending upload could not be deleted. Please try again."));
@@ -1037,7 +1082,7 @@ export function PersistentFileLibrary() {
 		}
 	}
 
-	function deleteRecoveryControls(record: UploadRecoveryRecord) {
+	function deleteRecoveryControls(record: { fileId: string; fileSize?: number }) {
 		if (confirmDeleteRecoveryID !== record.fileId) {
 			return <button type="button" className="delete-recovery-upload" disabled={uploadBusy} onClick={() => setConfirmDeleteRecoveryID(record.fileId)}>Delete upload</button>;
 		}
@@ -1203,6 +1248,12 @@ export function PersistentFileLibrary() {
   ));
   const pageStart = (page - 1) * FILES_PER_PAGE;
 	const totalPages = Math.max(1, Math.ceil(totalCount / FILES_PER_PAGE));
+	const readyFileCount = summary && scope === "owned" && !currentFolder
+		? Math.max(0, summary.fileCount - (summary.pendingFileCount ?? 0))
+		: summary?.fileCount ?? 0;
+	const readyStoredBytes = summary && scope === "owned" && !currentFolder
+		? Math.max(0, summary.totalBytes - (summary.pendingBytes ?? 0))
+		: summary?.totalBytes ?? 0;
 
   function resetLibraryView() {
     setOpenShareID("");
@@ -1281,11 +1332,12 @@ export function PersistentFileLibrary() {
           <p className="library-summary" aria-live="polite">
             {summary === null
               ? "Loading storage usage…"
-			  : `${summary.fileCount} ${summary.fileCount === 1 ? "file" : "files"} · ${formatBytes(summary.totalBytes)} ${currentFolder ? "in this folder" : "stored"}`}
+			  : `${readyFileCount} ${readyFileCount === 1 ? "file" : "files"} · ${formatBytes(readyStoredBytes)} ${currentFolder ? "in this folder" : "stored"}`}
 		  </p>
 		  {summary?.quotaBytes ? (
 			<div className="storage-capacity-summary">
 				<p>{currentFolder ? "Your account: " : ""}{formatBytes(Math.max(0, summary.quotaBytes - (summary.accountTotalBytes ?? summary.totalBytes)))} remaining of {formatBytes(summary.quotaBytes)} total</p>
+				{Boolean(summary.pendingBytes) && <p>{formatBytes(summary.pendingBytes ?? 0)} reserved by {summary.pendingFileCount} pending {summary.pendingFileCount === 1 ? "upload" : "uploads"}</p>}
 				<div className="storage-capacity" title={`${formatBytes(summary.accountTotalBytes ?? summary.totalBytes)} of ${formatBytes(summary.quotaBytes)} used`}>
 					<span style={{ width: `${Math.min(100, ((summary.accountTotalBytes ?? summary.totalBytes) / summary.quotaBytes) * 100)}%` }} />
 				</div>
@@ -1342,10 +1394,10 @@ export function PersistentFileLibrary() {
 			{!uploading && uploadQueue.every((item) => item.status === "complete") && <button type="button" className="clear-upload-queue" onClick={() => setUploadQueue([])}>Clear completed</button>}
 		</div>
 	  )}
-	  {visibleRecoveries.length > 0 && (
+	  {(visibleRecoveries.length > 0 || visibleServerPending.length > 0) && (
 		<section className="upload-recoveries" aria-label="Uploads to resume">
-			<h3>Uploads to resume</h3>
-			<p>Recovery details stay private in this browser.</p>
+			<h3>Pending uploads</h3>
+			<p>Resume uploads saved in this browser or delete reservations you no longer need.</p>
 			{visibleRecoveries.map((record) => (
 				<div className="upload-recovery-item" key={record.fileId}>
 					<span><strong>{record.fileName}</strong><small>{record.completionPending
@@ -1365,6 +1417,12 @@ export function PersistentFileLibrary() {
 					)}
 					<button type="button" disabled={uploadBusy} onClick={() => void discardRecovery(record)}>Forget recovery on this browser</button>
 					{deleteRecoveryControls(record)}
+				</div>
+			))}
+			{visibleServerPending.map((pending) => (
+				<div className="upload-recovery-item" key={pending.id}>
+					<span><strong>{pending.originalName}</strong><small>Pending upload · {formatBytes(pending.sizeBytes)} reserved — recovery data is not available in this browser.</small></span>
+					{deleteRecoveryControls({ fileId: pending.id, fileSize: pending.sizeBytes })}
 				</div>
 			))}
 			<small>Forgetting recovery only removes this browser’s recovery data. It does not pause or cancel an active upload, and it does not delete pending server metadata. Use Delete upload to remove the pending upload from Eterealink.</small>

@@ -301,6 +301,24 @@ func TestPersistentUploadUsesAuthenticatedOwner(t *testing.T) {
 	}
 }
 
+func TestPersistentUploadReportsMatchingPendingReservation(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	users := service.NewUsers(&userStore{}, time.Now)
+	files := service.NewFiles(&handlerFileStore{createErr: domain.ErrPendingUpload}, handlerFileBackend{}, time.Now, 15*time.Minute, 100)
+	handler := NewHandler(nil, nil, files, users, tokenVerifier{claims: identity.Claims{
+		UID: "firebase-user", Email: "person@example.com", DisplayName: "Person",
+	}}, readiness{}, logger)
+	request := httptest.NewRequest(http.MethodPost, "/v1/files", strings.NewReader(`{"originalName":"large.mov","sizeBytes":40}`))
+	request.Header.Set("Authorization", "Bearer verified-token")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"upload_already_pending"`) {
+		t.Fatalf("response = %d %s", response.Code, response.Body.String())
+	}
+}
+
 type tokenVerifier struct {
 	claims identity.Claims
 	err    error
@@ -361,8 +379,9 @@ type readiness struct{ err error }
 func (r readiness) Ping(context.Context) error { return r.err }
 
 type handlerFileStore struct {
-	file  domain.File
-	share domain.ShareLink
+	file      domain.File
+	share     domain.ShareLink
+	createErr error
 }
 
 func (s *handlerFileStore) CreateOwnedFile(_ context.Context, file domain.File) error {
@@ -371,6 +390,9 @@ func (s *handlerFileStore) CreateOwnedFile(_ context.Context, file domain.File) 
 }
 
 func (s *handlerFileStore) CreateOwnedFileWithinQuota(_ context.Context, file domain.File, defaultQuota int64) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
 	if file.SizeBytes > defaultQuota {
 		return domain.ErrQuotaExceeded
 	}

@@ -253,6 +253,21 @@ func (p *Postgres) CreateOwnedFileWithinQuota(ctx context.Context, file domain.F
 	if storageQuotaBytes != nil {
 		effectiveQuota = *storageQuotaBytes
 	}
+	var duplicatePending bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM files
+			WHERE owner_id = $1
+			  AND upload_status = 'PENDING'
+			  AND original_name = $2
+			  AND size_bytes = $3
+			  AND folder_id IS NOT DISTINCT FROM $4
+		)`, file.OwnerID, file.OriginalName, file.SizeBytes, file.FolderID).Scan(&duplicatePending); err != nil {
+		return fmt.Errorf("check pending file reservation: %w", err)
+	}
+	if duplicatePending {
+		return domain.ErrPendingUpload
+	}
 	var exceedsQuota bool
 	if err := tx.QueryRow(ctx, `
 		SELECT COALESCE(sum(size_bytes), 0)::numeric + $2::numeric > $3::numeric
@@ -405,12 +420,39 @@ func (p *Postgres) ListOwnedFiles(ctx context.Context, ownerID string, now time.
 func (p *Postgres) GetOwnedFileUsage(ctx context.Context, ownerID string) (domain.FileLibrarySummary, error) {
 	var summary domain.FileLibrarySummary
 	if err := p.pool.QueryRow(ctx, `
-		SELECT count(*), COALESCE(sum(size_bytes), 0)
+		SELECT count(*), COALESCE(sum(size_bytes), 0),
+		       count(*) FILTER (WHERE upload_status = 'PENDING'),
+		       COALESCE(sum(size_bytes) FILTER (WHERE upload_status = 'PENDING'), 0)
 		FROM files
-		WHERE owner_id = $1`, ownerID).Scan(&summary.FileCount, &summary.TotalBytes); err != nil {
+		WHERE owner_id = $1`, ownerID).Scan(&summary.FileCount, &summary.TotalBytes, &summary.PendingFileCount, &summary.PendingBytes); err != nil {
 		return domain.FileLibrarySummary{}, fmt.Errorf("get owned file usage: %w", err)
 	}
 	return summary, nil
+}
+
+func (p *Postgres) ListOwnedPendingFiles(ctx context.Context, ownerID string) ([]domain.File, error) {
+	rows, err := p.pool.Query(ctx, `
+		SELECT id, owner_id, folder_id, transfer_id, storage_key, original_name, mime_type,
+		       size_bytes, upload_status, created_at, completed_at, expires_at
+		FROM files
+		WHERE owner_id = $1 AND upload_status = 'PENDING'
+		ORDER BY created_at DESC`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("list pending owned files: %w", err)
+	}
+	defer rows.Close()
+	files := make([]domain.File, 0)
+	for rows.Next() {
+		file, err := scanFile(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan pending owned file: %w", err)
+		}
+		files = append(files, file)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list pending owned files: %w", err)
+	}
+	return files, nil
 }
 
 func (p *Postgres) GetEffectiveStorageQuota(ctx context.Context, userID string, defaultQuota int64) (int64, error) {

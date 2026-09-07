@@ -123,8 +123,18 @@ func TestPostgresPerUserQuotaAndConcurrentReservations(t *testing.T) {
 		t.Fatalf("concurrent results: succeeded=%d rejected=%d", succeeded, rejected)
 	}
 	usage, err := database.GetOwnedFileUsage(ctx, user.ID)
-	if err != nil || usage.FileCount != 1 || usage.TotalBytes != 6 {
+	if err != nil || usage.FileCount != 1 || usage.TotalBytes != 6 || usage.PendingFileCount != 1 || usage.PendingBytes != 6 {
 		t.Fatalf("pending usage = %#v, error = %v", usage, err)
+	}
+	pendingFiles, err := database.ListOwnedPendingFiles(ctx, user.ID)
+	if err != nil || len(pendingFiles) != 1 {
+		t.Fatalf("pending files = %#v, error = %v", pendingFiles, err)
+	}
+	duplicate := pendingFiles[0]
+	duplicate.ID = "99000000-0000-4000-8000-000000000013"
+	duplicate.StorageKey = "quota/duplicate"
+	if err := database.CreateOwnedFileWithinQuota(ctx, duplicate, 25); !errors.Is(err, domain.ErrPendingUpload) {
+		t.Fatalf("duplicate pending reservation error = %v", err)
 	}
 
 	larger := int64(12)

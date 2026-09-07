@@ -213,6 +213,7 @@ func (s *Folders) Contents(ctx context.Context, userID, folderID string, input L
 }
 
 func (s *Folders) applyAccountSummary(ctx context.Context, userID string, result *domain.FolderContents) error {
+	result.PendingFiles = []domain.File{}
 	result.Summary.AccountTotalBytes = result.Summary.TotalBytes
 	if usageStore, ok := s.store.(interface {
 		GetOwnedFileUsage(context.Context, string) (domain.FileLibrarySummary, error)
@@ -222,6 +223,17 @@ func (s *Folders) applyAccountSummary(ctx context.Context, userID string, result
 			return err
 		}
 		result.Summary.AccountTotalBytes = accountSummary.TotalBytes
+		result.Summary.PendingFileCount = accountSummary.PendingFileCount
+		result.Summary.PendingBytes = accountSummary.PendingBytes
+	}
+	if pendingStore, ok := s.store.(interface {
+		ListOwnedPendingFiles(context.Context, string) ([]domain.File, error)
+	}); ok {
+		pendingFiles, err := pendingStore.ListOwnedPendingFiles(ctx, userID)
+		if err != nil {
+			return err
+		}
+		result.PendingFiles = pendingFiles
 	}
 	if quotaStore, ok := s.store.(interface {
 		GetEffectiveStorageQuota(context.Context, string, int64) (int64, error)

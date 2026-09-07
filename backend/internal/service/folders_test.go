@@ -140,7 +140,8 @@ func TestFolderSummaryPreservesFolderUsageAndReportsAccountCapacity(t *testing.T
 		folderStoreStub: &folderStoreStub{contents: domain.FolderContents{
 			Summary: domain.FileLibrarySummary{FileCount: 4, TotalBytes: 384 * 1024 * 1024},
 		}},
-		accountUsage: domain.FileLibrarySummary{FileCount: 9, TotalBytes: 2 * 1024 * 1024 * 1024},
+		accountUsage: domain.FileLibrarySummary{FileCount: 9, TotalBytes: 2 * 1024 * 1024 * 1024, PendingFileCount: 1, PendingBytes: 512 * 1024 * 1024},
+		pendingFiles: []domain.File{{ID: "pending-1", OriginalName: "large.mov", SizeBytes: 512 * 1024 * 1024, Status: domain.FileStatusPending}},
 		quota:        1024 * 1024 * 1024 * 1024,
 	}
 	folders := NewFolders(store, time.Now)
@@ -154,6 +155,9 @@ func TestFolderSummaryPreservesFolderUsageAndReportsAccountCapacity(t *testing.T
 	}
 	if result.Summary.AccountTotalBytes != 2*1024*1024*1024 || result.Summary.QuotaBytes != 1024*1024*1024*1024 {
 		t.Fatalf("account capacity = %#v", result.Summary)
+	}
+	if result.Summary.PendingFileCount != 1 || result.Summary.PendingBytes != 512*1024*1024 || len(result.PendingFiles) != 1 || result.PendingFiles[0].ID != "pending-1" {
+		t.Fatalf("pending uploads = %#v, summary = %#v", result.PendingFiles, result.Summary)
 	}
 }
 
@@ -240,11 +244,16 @@ func (s *folderStoreStub) AcceptFolderInvite(_ context.Context, _, code string, 
 type folderSummaryStore struct {
 	*folderStoreStub
 	accountUsage domain.FileLibrarySummary
+	pendingFiles []domain.File
 	quota        int64
 }
 
 func (s *folderSummaryStore) GetOwnedFileUsage(context.Context, string) (domain.FileLibrarySummary, error) {
 	return s.accountUsage, nil
+}
+
+func (s *folderSummaryStore) ListOwnedPendingFiles(context.Context, string) ([]domain.File, error) {
+	return s.pendingFiles, nil
 }
 
 func (s *folderSummaryStore) GetEffectiveStorageQuota(context.Context, string, int64) (int64, error) {

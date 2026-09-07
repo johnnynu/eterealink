@@ -10,6 +10,7 @@ var (
 	ErrExpired          = errors.New("resource expired")
 	ErrRevoked          = errors.New("resource revoked")
 	ErrConflict         = errors.New("resource conflict")
+	ErrPendingUpload    = errors.New("matching upload is already pending")
 	ErrQuotaExceeded    = errors.New("storage quota exceeded")
 	ErrDisplayNameTaken = errors.New("display name is already in use")
 )
@@ -117,6 +118,8 @@ type FileLibrarySummary struct {
 	TotalBytes        int64 `json:"totalBytes"`
 	AccountTotalBytes int64 `json:"accountTotalBytes"`
 	QuotaBytes        int64 `json:"quotaBytes,omitempty"`
+	PendingFileCount  int64 `json:"pendingFileCount,omitempty"`
+	PendingBytes      int64 `json:"pendingBytes,omitempty"`
 }
 
 type FolderRole string
@@ -170,13 +173,14 @@ type FolderInvitePreview struct {
 }
 
 type FolderContents struct {
-	Current     *FolderAccess      `json:"current,omitempty"`
-	Breadcrumbs []Folder           `json:"breadcrumbs"`
-	Folders     []FolderAccess     `json:"folders"`
-	Files       []OwnedFile        `json:"files"`
-	Summary     FileLibrarySummary `json:"summary"`
-	TotalCount  int64              `json:"totalCount"`
-	NextCursor  string             `json:"nextCursor,omitempty"`
+	Current      *FolderAccess      `json:"current,omitempty"`
+	Breadcrumbs  []Folder           `json:"breadcrumbs"`
+	Folders      []FolderAccess     `json:"folders"`
+	Files        []OwnedFile        `json:"files"`
+	PendingFiles []File             `json:"pendingFiles"`
+	Summary      FileLibrarySummary `json:"summary"`
+	TotalCount   int64              `json:"totalCount"`
+	NextCursor   string             `json:"nextCursor,omitempty"`
 }
 
 type FileLibraryQuery struct {

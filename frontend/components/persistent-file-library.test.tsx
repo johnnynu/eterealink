@@ -59,9 +59,10 @@ const savedFile: FileRecord = {
 };
 const mounted: Array<{ container: HTMLDivElement; unmount: () => void }> = [];
 
-function library(files: Array<{ file: FileRecord; uploaderName?: string; share?: object; sharePath?: string }>, quotaBytes?: number) {
+function library(files: Array<{ file: FileRecord; uploaderName?: string; share?: object; sharePath?: string }>, quotaBytes?: number, pendingFiles: FileRecord[] = []) {
   return {
     files,
+	pendingFiles,
 	folders: [],
 	breadcrumbs: [],
 	totalCount: files.length,
@@ -503,6 +504,50 @@ describe("PersistentFileLibrary", () => {
 		expect(api.deletePersistentFile).toHaveBeenCalledWith("pending-1", "verified-token");
 		expect(recovery.deleteUploadRecovery).toHaveBeenCalledWith("pending-1");
 		expect(container.querySelector(".upload-recovery-item")).toBeNull();
+	});
+
+	it("shows and deletes a server pending upload when browser recovery data is missing", async () => {
+		const pendingFile: FileRecord = { ...savedFile, id: "pending-server", originalName: "large.mov", sizeBytes: 40, status: "PENDING", completedAt: undefined };
+		api.listFolderContents.mockResolvedValue({
+			...library([], 100, [pendingFile]),
+			summary: { fileCount: 1, totalBytes: 40, accountTotalBytes: 40, quotaBytes: 100, pendingFileCount: 1, pendingBytes: 40 },
+		});
+		api.deletePersistentFile.mockResolvedValue(undefined);
+		const container = await renderLibrary();
+
+		expect(container.textContent).toContain("0 files · 0 B stored");
+		expect(container.textContent).toContain("40 B reserved by 1 pending upload");
+		expect(container.textContent).toContain("recovery data is not available in this browser");
+		act(() => Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Delete upload")?.click());
+		await act(async () => { Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Delete pending upload")?.click(); });
+
+		expect(api.deletePersistentFile).toHaveBeenCalledWith("pending-server", "verified-token");
+		expect(container.querySelector(".upload-recovery-item")).toBeNull();
+		expect(container.textContent).not.toContain("reserved by 1 pending upload");
+	});
+
+	it("does not duplicate a pending upload that also has browser recovery data", async () => {
+		const pendingFile: FileRecord = { ...savedFile, id: "pending-1", originalName: "same.txt", status: "PENDING", completedAt: undefined };
+		recovery.listUploadRecoveries.mockResolvedValueOnce([recoveryRecord()]);
+		api.listFolderContents.mockResolvedValue(library([], 100, [pendingFile]));
+		const container = await renderLibrary();
+		await act(async () => { await Promise.resolve(); });
+
+		expect(container.querySelectorAll(".upload-recovery-item")).toHaveLength(1);
+		expect(container.textContent).toContain("Upload paused at 2 B of 5 B");
+		expect(container.textContent).not.toContain("recovery data is not available in this browser");
+	});
+
+	it("prevents a new reservation for a matching pending upload", async () => {
+		const pendingFile: FileRecord = { ...savedFile, id: "pending-server", originalName: "large.mov", sizeBytes: 5, status: "PENDING", completedAt: undefined };
+		api.listFolderContents.mockResolvedValue(library([], 100, [pendingFile]));
+		const container = await renderLibrary();
+		const input = container.querySelector<HTMLInputElement>("#owned-files-input")!;
+		Object.defineProperty(input, "files", { configurable: true, value: [new File(["hello"], "large.mov", { type: "video/quicktime" })] });
+		await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+
+		expect(api.createPersistentUpload).not.toHaveBeenCalled();
+		expect(container.textContent).toContain("already reserves storage");
 	});
 
   it("accepts files dropped onto the persistent library", async () => {

@@ -63,6 +63,8 @@ export type FileLibrarySummary = {
 	totalBytes: number;
 	accountTotalBytes?: number;
 	quotaBytes?: number;
+	pendingFileCount?: number;
+	pendingBytes?: number;
 };
 
 export type FileLibraryResult = {
@@ -117,6 +119,7 @@ export type FolderContents = {
 	breadcrumbs: FolderRecord[];
 	folders: FolderAccess[];
 	files: OwnedFileRecord[];
+	pendingFiles?: FileRecord[];
 	summary: FileLibrarySummary;
 	totalCount: number;
 	nextCursor?: string;
