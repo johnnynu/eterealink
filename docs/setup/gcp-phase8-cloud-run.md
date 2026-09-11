@@ -67,13 +67,13 @@ gcloud beta run domain-mappings create \
 
 Porkbun holds the generated apex `A` and `AAAA` records and the `www` CNAME. Google provisions and renews the certificates after those records resolve. The deployment script preserves the new and legacy production origins in Cloud Storage CORS and Firebase Authentication during the migration.
 
-After both new hostnames pass `make phase8-verify`, enable permanent path-preserving redirects from the legacy domains on the next deploy:
+After both new hostnames pass `make phase8-verify`, deploy with the production defaults to preserve permanent path-and-query redirects from the legacy domains:
 
 ```bash
-CANONICAL_HOST=aurealink.app \
-LEGACY_HOSTS=eterealink.com,www.eterealink.com \
 make phase8-deploy
 ```
+
+The deployment defaults use `aurealink.app` as the canonical host and redirect both `eterealink.com` and `www.eterealink.com`.
 
 Keep the legacy domain mappings and DNS records in place so existing `/s/{code}` share links and `/join/{code}` invitations reach the redirect.
 

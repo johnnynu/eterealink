@@ -26,7 +26,7 @@ describe("shared file page metadata", () => {
 		expect(fetchMock).toHaveBeenCalledWith("http://localhost:8080/v1/shares/abc", { cache: "no-store" });
 		expect(metadata.title).toBe("concert-film.mp4");
 		expect(metadata.description).toBe("4.00 KB shared securely through Aurea Link. No account required.");
-		expect(metadata.openGraph?.images).toEqual([expect.objectContaining({ url: "/opengraph-image", width: 1200, height: 630 })]);
+		expect(metadata.openGraph?.images).toEqual([expect.objectContaining({ url: "/s/abc/opengraph-image", width: 1200, height: 630 })]);
 	});
 
 	it("keeps generic metadata when the link cannot be resolved", async () => {
