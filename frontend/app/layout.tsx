@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { AuthProvider } from "@/components/auth-context";
 import { SiteHeader } from "@/components/site-header";
 import "./globals.css";
@@ -19,7 +20,11 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             <main>{children}</main>
             <footer>
               <span>© {new Date().getFullYear()} Aurea Link</span>
-              <span>Private by design · Temporary by default</span>
+              <span className="footer-links">
+                <Link href="/privacy">Privacy</Link>
+                <span aria-hidden="true">·</span>
+                <span>Private by design · Temporary by default</span>
+              </span>
             </footer>
           </div>
         </AuthProvider>
