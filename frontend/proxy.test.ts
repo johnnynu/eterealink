@@ -15,7 +15,7 @@ describe("canonical domain proxy", () => {
     process.env.CANONICAL_HOST = "aurealink.app";
     process.env.LEGACY_HOSTS = "legacy.example,www.legacy.example";
 
-    const request = new NextRequest("https://legacy.example/s/share-code?download=1", {
+    const request = new NextRequest("http://legacy.example:3000/s/share-code?download=1", {
       headers: { host: "legacy.example" },
     });
     const response = proxy(request);

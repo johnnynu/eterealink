@@ -16,6 +16,7 @@ export function proxy(request: NextRequest) {
 
   const destination = request.nextUrl.clone();
   destination.protocol = "https:";
-  destination.host = canonicalHost;
+  destination.hostname = canonicalHost;
+  destination.port = "";
   return NextResponse.redirect(destination, 308);
 }
