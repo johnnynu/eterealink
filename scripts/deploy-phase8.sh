@@ -223,6 +223,7 @@ gcloud secrets add-iam-policy-binding "${DATABASE_SECRET}" \
 	--quiet >/dev/null
 
 database_runtime_args=(--set-cloudsql-instances="${connection_name}")
+clear_migration_cloudsql=false
 sql_network_json="$(gcloud sql instances describe "${DB_INSTANCE}" \
 	--project="${PROJECT_ID}" \
 	--format=json)"
@@ -238,8 +239,8 @@ if jq --exit-status \
 		--network="${NETWORK}"
 		--subnet="${SUBNET}"
 		--vpc-egress=private-ranges-only
-		--clear-cloudsql-instances
 	)
+	clear_migration_cloudsql=true
 	echo "Preserving Phase 9 Direct VPC database connectivity."
 fi
 
@@ -257,6 +258,14 @@ gcloud run jobs deploy "${MIGRATION_JOB}" \
 	--max-retries=1 \
 	--task-timeout=10m \
 	--quiet
+
+if [[ "${clear_migration_cloudsql}" == true ]]; then
+	gcloud run jobs update "${MIGRATION_JOB}" \
+		--project="${PROJECT_ID}" \
+		--region="${REGION}" \
+		--clear-cloudsql-instances \
+		--quiet
+fi
 
 gcloud run jobs execute "${MIGRATION_JOB}" \
 	--project="${PROJECT_ID}" \
