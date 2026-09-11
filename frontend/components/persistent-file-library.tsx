@@ -736,7 +736,7 @@ export function PersistentFileLibrary() {
 			setMembers((current) => [...current.filter((item) => item.user.id !== member.user.id), member]);
 			setMemberEmail("");
 		} catch (memberError) {
-			setError(errorMessage(memberError, "The member could not be added. They must sign in to Eterealink first."));
+			setError(errorMessage(memberError, "The member could not be added. They must sign in to Aurea Link first."));
 		} finally {
 			setSharingFolder(false);
 		}
@@ -1019,7 +1019,7 @@ export function PersistentFileLibrary() {
 			await openLocation(currentFolder?.folder.id, scope);
 		} catch (recoveryError) {
 			const message = errorMessage(recoveryError, current.completionPending
-				? "The upload is stored, but Eterealink could not finish it yet. Retry completion."
+				? "The upload is stored, but Aurea Link could not finish it yet. Retry completion."
 				: "The interrupted upload could not be resumed. Please try again.");
 			const canceled = (recoveryError instanceof APIError && recoveryError.code === "canceled")
 				|| (recoveryError instanceof DOMException && recoveryError.name === "AbortError");
@@ -1425,7 +1425,7 @@ export function PersistentFileLibrary() {
 					{deleteRecoveryControls({ fileId: pending.id, fileSize: pending.sizeBytes })}
 				</div>
 			))}
-			<small>Forgetting recovery only removes this browser’s recovery data. It does not pause or cancel an active upload, and it does not delete pending server metadata. Use Delete upload to remove the pending upload from Eterealink.</small>
+			<small>Forgetting recovery only removes this browser’s recovery data. It does not pause or cancel an active upload, and it does not delete pending server metadata. Use Delete upload to remove the pending upload from Aurea Link.</small>
 		</section>
 	  )}
       {error && <p className="error-message library-error" role="alert">{error}</p>}
@@ -1448,7 +1448,7 @@ export function PersistentFileLibrary() {
 					<button type="button" className="close-sharing-panel" onClick={() => setMemberPanelOpen(false)} aria-label="Close folder access">Close</button>
 				</div>
 				<section className="folder-access-section">
-					<div><strong>Add an existing user</strong><p>Use this when you know their Eterealink email.</p></div>
+					<div><strong>Add an existing user</strong><p>Use this when you know their Aurea Link email.</p></div>
 					<form onSubmit={inviteMember}>
 						<input type="email" required placeholder="person@example.com" value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} />
 						<select aria-label="Member role" value={memberRole} onChange={(event) => setMemberRole(event.target.value as "VIEWER" | "CONTRIBUTOR")}>
@@ -1600,7 +1600,7 @@ export function PersistentFileLibrary() {
 			<h3>{currentFolder ? "This folder is empty." : scope === "shared" ? "Nothing has been shared with you." : "Your library is empty."}</h3>
 			<p>{currentFolder
 				? canUpload ? "Upload files here to share them with everyone who can access this folder." : "There are no files in this shared folder yet."
-				: scope === "shared" ? "Folders shared by other Eterealink users will appear here." : "Upload files you want to keep. They stay private and do not expire."}</p>
+				: scope === "shared" ? "Folders shared by other Aurea Link users will appear here." : "Upload files you want to keep. They stay private and do not expire."}</p>
           </div>
 		  {canUpload && <label className="secondary-button file-picker-label" htmlFor="owned-files-input">Choose files</label>}
         </div>

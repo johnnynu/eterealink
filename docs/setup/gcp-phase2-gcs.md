@@ -1,6 +1,6 @@
 # Phase 2 Google Cloud Storage setup
 
-This guide records the manually bootstrapped resources used for Eterealink's direct file-transfer phase. Terraform will adopt or replace this configuration in the infrastructure phase.
+This guide records the manually bootstrapped resources used for Aurea Link's direct file-transfer phase. Terraform will adopt or replace this configuration in the infrastructure phase.
 
 ## Resource baseline
 
@@ -89,8 +89,8 @@ gcloud services enable \
 
 gcloud iam service-accounts create eterealink-api \
   --project=eterealink \
-  --display-name='Eterealink API' \
-  --description='Runtime identity for the Eterealink Go API'
+  --display-name='Aurea Link API' \
+  --description='Runtime identity for the Aurea Link Go API'
 
 gcloud storage buckets create gs://eterealink-files \
   --project=eterealink \

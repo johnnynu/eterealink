@@ -39,6 +39,6 @@ describe("share link metadata", () => {
 
 	it("uses a clear title for multi-file links", () => {
 		expect(shareLinkTitle(transferShare(["one.txt", "two.txt"]))).toBe("2 files shared with you");
-		expect(shareLinkDescription(directShare())).toBe("2.00 KB shared securely through Eterealink. No account required.");
+		expect(shareLinkDescription(directShare())).toBe("2.00 KB shared securely through Aurea Link. No account required.");
 	});
 });

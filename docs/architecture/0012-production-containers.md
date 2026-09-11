@@ -6,7 +6,7 @@ Accepted and implemented in Phase 7.
 
 ## Context
 
-Eterealink needs reproducible application artifacts before its GCP infrastructure and Cloud Run services are introduced. The local development commands should remain useful, while the same application builds also need to run as unprivileged Linux containers with explicit health checks.
+Aurea Link needs reproducible application artifacts before its GCP infrastructure and Cloud Run services are introduced. The local development commands should remain useful, while the same application builds also need to run as unprivileged Linux containers with explicit health checks.
 
 ## Decision
 

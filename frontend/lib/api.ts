@@ -47,7 +47,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
   }
 
   throw new APIError(
-    body.error?.message ?? "Eterealink could not complete that request.",
+    body.error?.message ?? "Aurea Link could not complete that request.",
     response.status,
     body.error?.code,
   );

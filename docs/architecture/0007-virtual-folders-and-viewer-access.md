@@ -15,7 +15,7 @@ Persistent files already belong to an internal user and use opaque Cloud Storage
 - Allow nested folders and enforce case-insensitive sibling-name uniqueness. Reject self-parenting, descendant cycles, cross-owner parents, and cross-owner file moves.
 - Grant a viewer read-only access to the shared folder and all descendants. A direct membership on a nested folder does not expose its ancestors above the shared root.
 - Let viewers browse folder metadata and request signed downloads. Keep create, rename, move, delete, link, upload, and membership operations owner-only.
-- Add viewers by normalized email only when that email already maps to an Eterealink user. Do not create invitation or placeholder identities in this phase.
+- Add viewers by normalized email only when that email already maps to an Aurea Link user. Do not create invitation or placeholder identities in this phase.
 - Delete folders only when they contain no child folders or files. This prevents a folder operation from implicitly deleting or relocating user content.
 - Support bulk file moves in one transaction. Bulk file deletion continues using the existing object-first deletion path for each selected file so database rows never disappear before their storage objects.
 - Reserve persistent upload capacity atomically by locking the uploader row and counting both pending and ready files before metadata is inserted. Default the account quota to 25 GiB and allow positive per-user overrides.

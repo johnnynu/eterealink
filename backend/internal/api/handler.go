@@ -170,7 +170,7 @@ func bearerToken(value string) (string, bool) {
 }
 
 func writeAuthenticationRequired(w http.ResponseWriter, message string) {
-	w.Header().Set("WWW-Authenticate", `Bearer realm="eterealink"`)
+	w.Header().Set("WWW-Authenticate", `Bearer realm="aurea-link"`)
 	writeError(w, http.StatusUnauthorized, "unauthenticated", message)
 }
 

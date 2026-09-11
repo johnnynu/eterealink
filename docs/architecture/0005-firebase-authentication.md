@@ -6,7 +6,7 @@ Accepted for Phase 4.
 
 ## Context
 
-Eterealink needs Google Sign-In before persistent files and folder permissions can be attached to an owner. Anonymous transfers must remain available without credentials. The browser may know that a Firebase user is signed in, but authorization decisions must never trust client-provided profile fields or an unverified user identifier.
+Aurea Link needs Google Sign-In before persistent files and folder permissions can be attached to an owner. Anonymous transfers must remain available without credentials. The browser may know that a Firebase user is signed in, but authorization decisions must never trust client-provided profile fields or an unverified user identifier.
 
 ## Decision
 

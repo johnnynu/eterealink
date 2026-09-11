@@ -63,7 +63,7 @@ if ! gcloud compute networks describe "${NETWORK}" \
 		--project="${PROJECT_ID}" \
 		--subnet-mode=custom \
 		--bgp-routing-mode=regional \
-		--description="Eterealink production network" \
+		--description="Aurea Link production network" \
 		--quiet
 else
 	network_json="$(gcloud compute networks describe "${NETWORK}" \
@@ -84,7 +84,7 @@ if ! gcloud compute networks subnets describe "${SUBNET}" \
 		--region="${REGION}" \
 		--range="${SUBNET_CIDR}" \
 		--enable-private-ip-google-access \
-		--description="Direct VPC egress for Eterealink Cloud Run workloads" \
+		--description="Direct VPC egress for Aurea Link Cloud Run workloads" \
 		--quiet
 else
 	subnet_json="$(gcloud compute networks subnets describe "${SUBNET}" \
@@ -112,7 +112,7 @@ if ! gcloud compute addresses describe "${PSA_RANGE}" \
 		--addresses="${psa_address}" \
 		--prefix-length="${psa_prefix_length}" \
 		--network="${NETWORK}" \
-		--description="Private Services Access range for Eterealink" \
+		--description="Private Services Access range for Aurea Link" \
 		--quiet
 else
 	psa_json="$(gcloud compute addresses describe "${PSA_RANGE}" \

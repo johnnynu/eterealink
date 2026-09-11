@@ -210,7 +210,7 @@ func (s *Bundles) ResolveShare(ctx context.Context, code string) (ResolveTransfe
 
 	archive := SharedTransferArchive{Status: shared.Transfer.ArchiveStatus, SizeBytes: shared.Transfer.ArchiveSizeBytes}
 	if shared.Transfer.ArchiveStatus == domain.ArchiveStatusReady {
-		target, err := s.storage.SignDownload(ctx, shared.Transfer.ArchiveStorageKey, "eterealink-"+shared.Share.ShortCode+".zip", expiresAt)
+		target, err := s.storage.SignDownload(ctx, shared.Transfer.ArchiveStorageKey, "aurea-link-"+shared.Share.ShortCode+".zip", expiresAt)
 		if err != nil {
 			return ResolveTransferResult{}, fmt.Errorf("sign archive download: %w", err)
 		}

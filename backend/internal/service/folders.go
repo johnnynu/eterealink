@@ -17,7 +17,7 @@ var (
 	ErrInvalidFolderName   = errors.New("folder name must contain 1 to 255 characters")
 	ErrFolderNotEmpty      = errors.New("folder must be empty before it can be deleted")
 	ErrInvalidFolderMove   = errors.New("a folder cannot be moved into itself or one of its descendants")
-	ErrInvalidMember       = errors.New("member must be a different existing Eterealink user")
+	ErrInvalidMember       = errors.New("member must be a different existing Aurea Link user")
 	ErrTooManyFiles        = errors.New("choose between 1 and 100 files")
 	ErrInvalidLibraryQuery = errors.New("library search or cursor is invalid")
 	ErrInvalidFolderRole   = errors.New("folder role must be VIEWER or CONTRIBUTOR")

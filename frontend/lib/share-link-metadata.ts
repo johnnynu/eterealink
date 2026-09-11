@@ -11,5 +11,5 @@ export function shareLinkDescription(result: ShareResult) {
 	const totalBytes = isTransferResult(result)
 		? result.files.reduce((total, item) => total + item.file.sizeBytes, 0)
 		: result.file.sizeBytes;
-	return `${formatBytes(totalBytes)} shared securely through Eterealink. No account required.`;
+	return `${formatBytes(totalBytes)} shared securely through Aurea Link. No account required.`;
 }

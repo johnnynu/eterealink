@@ -15,7 +15,7 @@ import {
 	WarningCircleIcon,
 } from "@phosphor-icons/react";
 
-const PLAYER_PREFERENCES_KEY = "eterealink-video-preferences";
+const PLAYER_PREFERENCES_KEY = "aurea-link-video-preferences";
 const CONTROL_HIDE_DELAY = 2_400;
 const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 

@@ -478,7 +478,7 @@ describe("PersistentFileLibrary", () => {
 		const retry = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Retry completion")!;
 		await act(async () => { retry.click(); });
 		expect(recovery.deleteUploadRecovery).not.toHaveBeenCalled();
-		expect(container.textContent).toContain("Failed · The upload is stored, but Eterealink could not finish it yet. Retry completion.");
+		expect(container.textContent).toContain("Failed · The upload is stored, but Aurea Link could not finish it yet. Retry completion.");
 		const discard = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Forget recovery on this browser")!;
 		await act(async () => { discard.click(); });
 		expect(recovery.deleteUploadRecovery).toHaveBeenCalledWith("pending-1");

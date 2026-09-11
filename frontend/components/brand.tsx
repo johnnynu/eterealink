@@ -4,11 +4,11 @@ import type { MouseEventHandler } from "react";
 
 export function Brand({ href = "/", onClick }: { href?: string; onClick?: MouseEventHandler<HTMLAnchorElement> }) {
   return (
-    <Link className="brand" href={href} aria-label="Eterealink home" onClick={onClick}>
+    <Link className="brand" href={href} aria-label="Aurea Link home" onClick={onClick}>
       <span className="brand-mark" aria-hidden="true">
         <PlantIcon size={31} weight="duotone" />
       </span>
-      <span>Eterealink</span>
+      <span>Aurea Link</span>
     </Link>
   );
 }

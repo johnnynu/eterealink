@@ -772,7 +772,7 @@ func (p *Postgres) listFolderFiles(ctx context.Context, ownerID string, folderID
 	statement := `
 		SELECT f.id, f.owner_id, f.folder_id, f.transfer_id, f.storage_key, f.original_name, f.mime_type,
 		       f.size_bytes, f.upload_status, f.created_at, f.completed_at, f.expires_at,
-		       COALESCE(uploader.custom_display_name, NULLIF(BTRIM(uploader.display_name), ''), uploader.email, 'Eterealink user'),
+		       COALESCE(uploader.custom_display_name, NULLIF(BTRIM(uploader.display_name), ''), uploader.email, 'Aurea Link user'),
 		       s.id, s.short_code, s.file_id, s.folder_id, s.transfer_id, s.created_by, s.created_at, s.expires_at, s.revoked_at
 		FROM files f
 		JOIN users uploader ON uploader.id = f.owner_id
@@ -1089,7 +1089,7 @@ func (p *Postgres) GetFolderInvitePreview(ctx context.Context, shortCode string,
 	var preview domain.FolderInvitePreview
 	var revokedAt *time.Time
 	err := p.pool.QueryRow(ctx, `
-		SELECT f.name, COALESCE(u.custom_display_name, NULLIF(BTRIM(u.display_name), ''), u.email, 'An Eterealink user'), i.role, i.expires_at, i.revoked_at
+		SELECT f.name, COALESCE(u.custom_display_name, NULLIF(BTRIM(u.display_name), ''), u.email, 'An Aurea Link user'), i.role, i.expires_at, i.revoked_at
 		FROM folder_invites i
 		JOIN folders f ON f.id = i.folder_id
 		JOIN users u ON u.id = f.owner_id

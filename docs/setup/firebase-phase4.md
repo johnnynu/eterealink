@@ -4,7 +4,7 @@ This setup enables Google Sign-In in the browser and Firebase ID-token verificat
 
 ## 1. Create or select the Firebase project
 
-1. Open the [Firebase console](https://console.firebase.google.com/) and add Firebase to the Google Cloud project used by Eterealink, or create a development Firebase project.
+1. Open the [Firebase console](https://console.firebase.google.com/) and add Firebase to the Google Cloud project used by Aurea Link, or create a development Firebase project.
 2. In **Project settings**, register a Web app.
 3. Copy the web app configuration values for the frontend environment.
 
@@ -38,6 +38,8 @@ NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=
 NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
 NEXT_PUBLIC_FIREBASE_APP_ID=
 ```
+
+For production, set `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=aurealink.app`. The Next.js server transparently proxies `/__/auth/*` to the existing Firebase project's helper endpoints, keeping the Firebase project identifier out of the Google Sign-In prompt without migrating accounts. Add `https://aurealink.app/__/auth/handler` to the Google OAuth client's authorized redirect URIs before deploying this value.
 
 The sign-in control is enabled when the API key, auth domain, project ID, and app ID are present. Restart the Next.js development server after changing public environment variables.
 

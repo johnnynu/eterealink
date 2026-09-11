@@ -17,7 +17,9 @@ FRONTEND_SERVICE_ACCOUNT="${FRONTEND_SERVICE_ACCOUNT:-eterealink-web@${PROJECT_I
 GCS_BUCKET="${GCS_BUCKET:-eterealink-files}"
 FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-${PROJECT_ID}}"
 FRONTEND_ENV_FILE="${FRONTEND_ENV_FILE:-frontend/.env.local}"
-CUSTOM_FRONTEND_DOMAINS="${CUSTOM_FRONTEND_DOMAINS:-eterealink.com,www.eterealink.com}"
+CUSTOM_FRONTEND_DOMAINS="${CUSTOM_FRONTEND_DOMAINS:-aurealink.app,www.aurealink.app,eterealink.com,www.eterealink.com}"
+CANONICAL_HOST="${CANONICAL_HOST:-}"
+LEGACY_HOSTS="${LEGACY_HOSTS:-}"
 REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-300s}"
 NETWORK="${NETWORK:-eterealink}"
 SUBNET="${SUBNET:-eterealink-us-west1}"
@@ -51,7 +53,7 @@ if [[ ! -f "${FRONTEND_ENV_FILE}" ]]; then
 fi
 
 firebase_api_key="${NEXT_PUBLIC_FIREBASE_API_KEY:-$(read_frontend_env NEXT_PUBLIC_FIREBASE_API_KEY)}"
-firebase_auth_domain="${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN:-$(read_frontend_env NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN)}"
+firebase_auth_domain="${NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN:-aurealink.app}"
 firebase_storage_bucket="${NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET:-$(read_frontend_env NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET)}"
 firebase_messaging_sender_id="${NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:-$(read_frontend_env NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID)}"
 firebase_app_id="${NEXT_PUBLIC_FIREBASE_APP_ID:-$(read_frontend_env NEXT_PUBLIC_FIREBASE_APP_ID)}"
@@ -96,7 +98,7 @@ if ! gcloud artifacts repositories describe "${REPOSITORY}" \
 		--project="${PROJECT_ID}" \
 		--location="${REGION}" \
 		--repository-format=docker \
-		--description="Eterealink production container images" \
+		--description="Aurea Link production container images" \
 		--immutable-tags \
 		--quiet
 fi
@@ -105,8 +107,8 @@ if ! gcloud iam service-accounts describe "${FRONTEND_SERVICE_ACCOUNT}" \
 	--project="${PROJECT_ID}" >/dev/null 2>&1; then
 	gcloud iam service-accounts create "${FRONTEND_SERVICE_ACCOUNT%%@*}" \
 		--project="${PROJECT_ID}" \
-		--display-name="Eterealink web" \
-		--description="Runtime identity for the Eterealink Next.js frontend" \
+		--display-name="Aurea Link web" \
+		--description="Runtime identity for the Aurea Link Next.js frontend" \
 		--quiet
 fi
 
@@ -301,7 +303,7 @@ gcloud run deploy "${FRONTEND_SERVICE}" \
 	--region="${REGION}" \
 	--image="${frontend_image_uri}" \
 	--service-account="${FRONTEND_SERVICE_ACCOUNT}" \
-	--set-env-vars="API_BASE_URL=${api_public_url}" \
+	--set-env-vars="^@^API_BASE_URL=${api_public_url}@CANONICAL_HOST=${CANONICAL_HOST}@LEGACY_HOSTS=${LEGACY_HOSTS}" \
 	--port=3000 \
 	--cpu=1 \
 	--memory=512Mi \

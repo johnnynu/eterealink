@@ -13,7 +13,7 @@ export type UploadRecoveryRecord = {
   updatedAt: number;
 };
 
-const DATABASE_NAME = "eterealink-upload-recovery";
+const DATABASE_NAME = "aurea-link-upload-recovery";
 const DATABASE_VERSION = 1;
 const STORE_NAME = "persistent-uploads";
 

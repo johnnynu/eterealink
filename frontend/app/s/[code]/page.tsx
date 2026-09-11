@@ -12,8 +12,8 @@ function shareMetadata(title: string, description: string): Metadata {
 			title,
 			description,
 			type: "website",
-			siteName: "Eterealink",
-			images: [{ url: "/opengraph-image", width: 1200, height: 630, alt: "Eterealink" }],
+			siteName: "Aurea Link",
+			images: [{ url: "/opengraph-image", width: 1200, height: 630, alt: "Aurea Link" }],
 		},
 		twitter: {
 			card: "summary_large_image",
@@ -24,7 +24,7 @@ function shareMetadata(title: string, description: string): Metadata {
 	};
 }
 
-const fallbackMetadata = shareMetadata("Shared file", "A file was shared with you through Eterealink.");
+const fallbackMetadata = shareMetadata("Shared file", "A file was shared with you through Aurea Link.");
 
 export async function generateMetadata({ params }: { params: Promise<{ code: string }> }): Promise<Metadata> {
 	const { code } = await params;

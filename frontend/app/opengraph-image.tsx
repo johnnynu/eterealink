@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-export const alt = "Eterealink";
+export const alt = "Aurea Link";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -26,7 +26,7 @@ export default function OpenGraphImage() {
 				<img src={logo} width={138} height={138} alt="" />
 			</div>
 			<div style={{ display: "flex", flexDirection: "column", marginLeft: 58 }}>
-				<div style={{ fontSize: 72, fontWeight: 700, letterSpacing: "-3px" }}>Eterealink</div>
+				<div style={{ fontSize: 72, fontWeight: 700, letterSpacing: "-3px" }}>Aurea Link</div>
 				<div style={{ marginTop: 16, fontSize: 36, color: "#52635b" }}>Files shared simply.</div>
 			</div>
 		</div>,

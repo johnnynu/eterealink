@@ -46,14 +46,14 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-RUN addgroup -S -g 10001 eterealink \
-    && adduser -S -D -H -u 10001 -G eterealink eterealink
+RUN addgroup -S -g 10001 aurealink \
+    && adduser -S -D -H -u 10001 -G aurealink aurealink
 
-COPY --from=build --chown=eterealink:eterealink /app/public ./public
-COPY --from=build --chown=eterealink:eterealink /app/.next/standalone ./
-COPY --from=build --chown=eterealink:eterealink /app/.next/static ./.next/static
+COPY --from=build --chown=aurealink:aurealink /app/public ./public
+COPY --from=build --chown=aurealink:aurealink /app/.next/standalone ./
+COPY --from=build --chown=aurealink:aurealink /app/.next/static ./.next/static
 
-USER eterealink
+USER aurealink
 
 EXPOSE 3000
 

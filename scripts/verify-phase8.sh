@@ -7,7 +7,7 @@ REGION="${REGION:-us-west1}"
 SERVICE="${SERVICE:-eterealink-api}"
 FRONTEND_SERVICE="${FRONTEND_SERVICE:-eterealink-web}"
 GCS_BUCKET="${GCS_BUCKET:-eterealink-files}"
-CUSTOM_FRONTEND_URLS="${CUSTOM_FRONTEND_URLS:-https://eterealink.com https://www.eterealink.com}"
+CUSTOM_FRONTEND_URLS="${CUSTOM_FRONTEND_URLS:-https://aurealink.app https://www.aurealink.app}"
 REQUEST_TIMEOUT_SECONDS="${REQUEST_TIMEOUT_SECONDS:-300}"
 
 for command in curl gcloud grep jq; do
@@ -63,7 +63,7 @@ for custom_frontend_url in "${custom_frontend_urls[@]}"; do
 	echo
 	curl --fail --silent --show-error "${custom_frontend_url}/api/readyz"
 	echo
-	curl --fail --silent --show-error "${custom_frontend_url}" | grep -Fq '<title>Eterealink — Share a file simply</title>'
+	curl --fail --silent --show-error "${custom_frontend_url}" | grep -Fq '<title>Aurea Link — Share a file simply</title>'
 	curl --fail --silent --show-error "${custom_frontend_url}/icon.svg" | grep -Fq '<svg'
 
 	custom_frontend_hostname="${custom_frontend_url#https://}"

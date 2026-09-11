@@ -6,7 +6,7 @@ Accepted on September 2, 2026.
 
 ## Context
 
-Eterealink must move file bytes directly between browsers and object storage without making the Go API a data proxy. Anonymous clients cannot receive bucket credentials, and marking a database record ready before confirming the object would allow incomplete or inconsistent shares.
+Aurea Link must move file bytes directly between browsers and object storage without making the Go API a data proxy. Anonymous clients cannot receive bucket credentials, and marking a database record ready before confirming the object would allow incomplete or inconsistent shares.
 
 ## Decision
 

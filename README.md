@@ -1,10 +1,6 @@
-<p align="center">
-  <img src="./eterea-chrome-final.png" alt="Eterealink" width="900">
-</p>
+# Aurea Link
 
-# Eterealink
-
-Eterealink is a cloud-native file-sharing platform for quickly uploading, organizing, previewing, and sharing files through short URLs. Anonymous transfers require no account and expire after 24 hours; authenticated users can retain private files, organize them into folders, and collaborate through role-based shared folders.
+Aurea Link is a cloud-native file-sharing platform for quickly uploading, organizing, previewing, and sharing files through short URLs. Anonymous transfers require no account and expire after 24 hours; authenticated users can retain private files, organize them into folders, and collaborate through role-based shared folders.
 
 The project is designed as both a useful product and a practical demonstration of cloud architecture, networking, security, infrastructure as code, CI/CD, and observability on Google Cloud Platform.
 
@@ -35,8 +31,8 @@ Implemented:
 - Frontend lint, unit-test, and production-build checks
 - Optional Firebase Google Sign-In without changing the anonymous transfer flow
 - Server-side Firebase ID-token verification and idempotent local user provisioning
-- Optional unique Eterealink display names with Google-name fallback, profile editing, and collaborator-facing realtime refreshes
-- Live end-to-end identity verification against the Eterealink Firebase project
+- Optional unique Aurea Link display names with Google-name fallback, profile editing, and collaborator-facing realtime refreshes
+- Live end-to-end identity verification against the production Firebase project
 - Owner-scoped persistent uploads, file listing, authorized downloads, deletion, and revocable share links
 - Authenticated uploads constrained by the account's remaining total storage; anonymous transfers remain capped at 1 GiB combined
 - Persistent-library storage totals, drag-and-drop, filename search, shared-file filtering, sorting, and bounded pagination
@@ -54,7 +50,7 @@ Implemented:
 - Short-lived inline preview targets for supported images, PDFs, video, audio, and text
 - Escaped text rendering, cross-origin PDF embedding, a server-side media allowlist, and generic fallback for unsupported files
 - Preview selection for multi-file transfers and an authenticated preview dialog for private or shared-folder files
-- Original-quality video playback with Eterealink controls for seeking, ten-second skips, volume, playback speed, picture-in-picture, fullscreen, source-resolution display, buffering and codec feedback, auto-hiding controls, and remembered preferences
+- Original-quality video playback with Aurea Link controls for seeking, ten-second skips, volume, playback speed, picture-in-picture, fullscreen, source-resolution display, buffering and codec feedback, auto-hiding controls, and remembered preferences
 - Multi-stage, non-root production images for the Go API/migration runner and standalone Next.js server
 - A health-gated Docker Compose stack that runs PostgreSQL, one-shot migrations, the API, and the frontend in dependency order
 - Immutable API and frontend images in Artifact Registry, one-shot Cloud Run migration executions, and public scale-to-zero Cloud Run services
@@ -75,17 +71,17 @@ WHERE email = 'owner@example.com';
 An administrator can set or reset an override through `PATCH /v1/admin/users/{userID}/quota` with a Firebase bearer token:
 
 ```bash
-curl -X PATCH "https://eterealink.com/api/v1/admin/users/USER_UUID/quota" \
+curl -X PATCH "https://aurealink.app/api/v1/admin/users/USER_UUID/quota" \
   -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"storageQuotaBytes":107374182400}'
 
-curl -X PATCH "https://eterealink.com/api/v1/admin/users/USER_UUID/quota" \
+curl -X PATCH "https://aurealink.app/api/v1/admin/users/USER_UUID/quota" \
   -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"storageQuotaBytes":1099511627776}'
 
-curl -X PATCH "https://eterealink.com/api/v1/admin/users/USER_UUID/quota" \
+curl -X PATCH "https://aurealink.app/api/v1/admin/users/USER_UUID/quota" \
   -H "Authorization: Bearer FIREBASE_ID_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{"storageQuotaBytes":null}'
@@ -103,7 +99,7 @@ Authenticated resumable sessions are retained in IndexedDB after initiation. Aft
 
 The complete anonymous metadata → direct GCS upload → completion → short-link resolution → signed download flow is covered by automated tests and can be exercised against the local PostgreSQL service and Phase 2 GCS bucket.
 
-The Phase 8 application is deployed at [`https://eterealink.com`](https://eterealink.com), with the deterministic [`run.app` address](https://eterealink-web-300331831616.us-west1.run.app) retained as a fallback. It is backed by the deployed [API](https://eterealink-api-300331831616.us-west1.run.app). API process and dependency checks are `/health` and `/readyz`.
+The application is deployed at [`https://aurealink.app`](https://aurealink.app), with the deterministic [`run.app` address](https://eterealink-web-300331831616.us-west1.run.app) retained as a fallback. It is backed by the deployed [API](https://eterealink-api-300331831616.us-west1.run.app). API process and dependency checks are `/health` and `/readyz`.
 
 ### Post-MVP media roadmap
 
@@ -196,7 +192,7 @@ An anonymous transfer follows this path:
 | `GET` | `/health` | Process liveness through the Cloud Run public endpoint |
 | `GET` | `/readyz` | Database-aware readiness |
 | `GET` | `/v1/me` | Verify a Firebase bearer token and return the provisioned user |
-| `PATCH` | `/v1/me` | Set or clear the authenticated user's optional unique Eterealink display name |
+| `PATCH` | `/v1/me` | Set or clear the authenticated user's optional unique Aurea Link display name |
 | `PATCH` | `/v1/admin/users/{userID}/quota` | Set or reset a user's storage quota as a database-authorized administrator |
 | `POST` | `/v1/files` | Create owner-linked persistent file metadata and an upload target |
 | `GET` | `/v1/files` | List the authenticated user's ready files and aggregate pending-plus-ready storage usage |

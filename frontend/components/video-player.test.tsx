@@ -109,7 +109,7 @@ describe("VideoPlayer", () => {
 	});
 
 	it("restores and updates volume and playback-speed preferences", async () => {
-		window.localStorage.setItem("eterealink-video-preferences", JSON.stringify({ volume: 0.35, playbackRate: 1.5 }));
+		window.localStorage.setItem("aurea-link-video-preferences", JSON.stringify({ volume: 0.35, playbackRate: 1.5 }));
 		const container = await renderPlayer();
 		const video = container.querySelector("video")!;
 
@@ -122,7 +122,7 @@ describe("VideoPlayer", () => {
 			speed.value = "2";
 			speed.dispatchEvent(new Event("change", { bubbles: true }));
 		});
-		expect(JSON.parse(window.localStorage.getItem("eterealink-video-preferences")!)).toEqual({ volume: 0.35, playbackRate: 2 });
+		expect(JSON.parse(window.localStorage.getItem("aurea-link-video-preferences")!)).toEqual({ volume: 0.35, playbackRate: 2 });
 	});
 
 	it("enters fullscreen on a video double click", async () => {

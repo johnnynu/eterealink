@@ -6,7 +6,7 @@ Accepted and implemented in Phase 6.9.
 
 ## Context
 
-Firebase supplies an identity display name, but collaborators may want a distinct Eterealink name. Identity claims are refreshed during authenticated requests, so a custom value must remain separate and must not be overwritten during provisioning.
+Firebase supplies an identity display name, but collaborators may want a distinct Aurea Link name. Identity claims are refreshed during authenticated requests, so a custom value must remain separate and must not be overwritten during provisioning.
 
 ## Decision
 

@@ -16,7 +16,8 @@ Phase 8 publishes the Go API and Next.js frontend images to Artifact Registry, a
 | Database secret | `eterealink-database-url` |
 | Runtime identity | `eterealink-api@eterealink.iam.gserviceaccount.com` |
 | Frontend identity | `eterealink-web@eterealink.iam.gserviceaccount.com` |
-| Public domains | `eterealink.com`, `www.eterealink.com` |
+| Public domains | `aurealink.app`, `www.aurealink.app` |
+| Legacy domains | `eterealink.com`, `www.eterealink.com` |
 
 The original Phase 8 Cloud SQL instance has a public address but no authorized networks. The API and migration job reach it through Cloud Run's managed Cloud SQL integration. After this deployment, follow the [Phase 9 private networking guide](./gcp-phase9-private-networking.md) to replace that transitional path with private IP and Direct VPC egress.
 
@@ -53,18 +54,28 @@ Do not place an administrator email in application configuration. Future quota c
 Domain ownership is verified once through Google Search Console. The frontend has direct Cloud Run mappings for the apex and `www` hostnames:
 
 ```bash
-gcloud domains verify eterealink.com
+gcloud domains verify aurealink.app
 gcloud beta run domain-mappings create \
   --service=eterealink-web \
-  --domain=eterealink.com \
+  --domain=aurealink.app \
   --region=us-west1
 gcloud beta run domain-mappings create \
   --service=eterealink-web \
-  --domain=www.eterealink.com \
+  --domain=www.aurealink.app \
   --region=us-west1
 ```
 
-Porkbun holds the generated apex `A` and `AAAA` records and the `www` CNAME. Google provisions and renews the certificates after those records resolve. The deployment script preserves all three production origins in Cloud Storage CORS and Firebase Authentication.
+Porkbun holds the generated apex `A` and `AAAA` records and the `www` CNAME. Google provisions and renews the certificates after those records resolve. The deployment script preserves the new and legacy production origins in Cloud Storage CORS and Firebase Authentication during the migration.
+
+After both new hostnames pass `make phase8-verify`, enable permanent path-preserving redirects from the legacy domains on the next deploy:
+
+```bash
+CANONICAL_HOST=aurealink.app \
+LEGACY_HOSTS=eterealink.com,www.eterealink.com \
+make phase8-deploy
+```
+
+Keep the legacy domain mappings and DNS records in place so existing `/s/{code}` share links and `/join/{code}` invitations reach the redirect.
 
 ## Verify
 
@@ -94,4 +105,4 @@ gcloud run jobs executions list \
   --region=us-west1
 ```
 
-The complete application is available at `https://eterealink.com` and `https://www.eterealink.com`, with `https://eterealink-web-300331831616.us-west1.run.app` retained as a fallback. The frontend keeps API control-plane calls same-origin through its server-side `/api` proxy; file bytes continue to move directly between the browser and Cloud Storage.
+The complete application is available at `https://aurealink.app` and `https://www.aurealink.app`, with `https://eterealink-web-300331831616.us-west1.run.app` retained as a fallback. The legacy domains remain authorized until their existing share and invite URLs redirect to the corresponding path on `aurealink.app`. The frontend keeps API control-plane calls same-origin through its server-side `/api` proxy; file bytes continue to move directly between the browser and Cloud Storage.
