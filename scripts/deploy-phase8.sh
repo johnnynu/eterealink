@@ -19,6 +19,8 @@ FIREBASE_PROJECT_ID="${FIREBASE_PROJECT_ID:-${PROJECT_ID}}"
 FRONTEND_ENV_FILE="${FRONTEND_ENV_FILE:-frontend/.env.local}"
 CUSTOM_FRONTEND_DOMAINS="${CUSTOM_FRONTEND_DOMAINS:-eterealink.com,www.eterealink.com}"
 REQUEST_TIMEOUT="${REQUEST_TIMEOUT:-300s}"
+NETWORK="${NETWORK:-eterealink}"
+SUBNET="${SUBNET:-eterealink-us-west1}"
 
 for command in curl gcloud git jq openssl; do
 	if ! command -v "${command}" >/dev/null 2>&1; then
@@ -218,6 +220,27 @@ gcloud secrets add-iam-policy-binding "${DATABASE_SECRET}" \
 	--condition=None \
 	--quiet >/dev/null
 
+database_runtime_args=(--set-cloudsql-instances="${connection_name}")
+sql_network_json="$(gcloud sql instances describe "${DB_INSTANCE}" \
+	--project="${PROJECT_ID}" \
+	--format=json)"
+if jq --exit-status \
+	'.settings.ipConfiguration.ipv4Enabled == false and (.settings.ipConfiguration.privateNetwork // "") != ""' \
+	<<<"${sql_network_json}" >/dev/null; then
+	configured_network="$(jq -r '.settings.ipConfiguration.privateNetwork | split("/") | last' <<<"${sql_network_json}")"
+	if [[ "${configured_network}" != "${NETWORK}" ]]; then
+		echo "private Cloud SQL network is ${configured_network}, expected ${NETWORK}" >&2
+		exit 1
+	fi
+	database_runtime_args=(
+		--network="${NETWORK}"
+		--subnet="${SUBNET}"
+		--vpc-egress=private-ranges-only
+		--clear-cloudsql-instances
+	)
+	echo "Preserving Phase 9 Direct VPC database connectivity."
+fi
+
 echo "Deploying and executing database migrations..."
 gcloud run jobs deploy "${MIGRATION_JOB}" \
 	--project="${PROJECT_ID}" \
@@ -226,7 +249,7 @@ gcloud run jobs deploy "${MIGRATION_JOB}" \
 	--command=/app/migrate \
 	--args=up \
 	--service-account="${RUNTIME_SERVICE_ACCOUNT}" \
-	--set-cloudsql-instances="${connection_name}" \
+	"${database_runtime_args[@]}" \
 	--set-secrets="DATABASE_URL=${DATABASE_SECRET}:latest" \
 	--set-env-vars=APP_ENV=production \
 	--max-retries=1 \
@@ -245,7 +268,7 @@ gcloud run deploy "${SERVICE}" \
 	--region="${REGION}" \
 	--image="${image_uri}" \
 	--service-account="${RUNTIME_SERVICE_ACCOUNT}" \
-	--set-cloudsql-instances="${connection_name}" \
+	"${database_runtime_args[@]}" \
 	--set-secrets="DATABASE_URL=${DATABASE_SECRET}:latest" \
 	--set-env-vars="APP_ENV=production,HTTP_ADDR=:8080,STORAGE_BACKEND=gcs,GCS_BUCKET=${GCS_BUCKET},GCS_SIGNING_SERVICE_ACCOUNT=${RUNTIME_SERVICE_ACCOUNT},FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID},ANONYMOUS_FILE_TTL=24h,SIGNED_URL_TTL=15m,MAX_ANONYMOUS_FILE_BYTES=1073741824,MAX_PERSISTENT_STORAGE_BYTES=26843545600,MAX_ANONYMOUS_TRANSFER_BYTES=1073741824,MAX_ANONYMOUS_FILES=10" \
 	--port=8080 \

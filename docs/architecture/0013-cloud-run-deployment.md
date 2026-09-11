@@ -26,4 +26,4 @@ Phase 7 produced deployable API, migration, and frontend artifacts in non-root c
 
 The full browser application is publicly deployable, and the database schema is upgraded before a new API revision serves traffic. Artifact Registry, Cloud Run, Cloud SQL, Secret Manager, Firebase authorization, bucket CORS, and IAM bindings are still manually bootstrapped in this phase; Phase 10 will replace the infrastructure portions with Terraform.
 
-The transitional Cloud SQL public address is not the target network architecture. Phase 9 will create the custom VPC, Private Services Access allocation, private database address, and Direct VPC egress path, then remove the public database address after the private path is verified.
+The transitional Cloud SQL public address is not the target network architecture. [ADR 0014](./0014-private-cloud-sql-networking.md) replaces it with the Phase 9 custom VPC, Private Services Access allocation, private database address, and Direct VPC egress path.

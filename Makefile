@@ -3,7 +3,7 @@ include .env
 export
 endif
 
-.PHONY: fmt test backend-test frontend-test frontend-install run frontend-run frontend-build migrate-up migrate-down containers-build containers-up containers-down phase8-deploy phase8-verify
+.PHONY: fmt test backend-test frontend-test frontend-install run frontend-run frontend-build migrate-up migrate-down containers-build containers-up containers-down phase8-deploy phase8-verify phase9-deploy phase9-verify
 
 fmt:
 	cd backend && gofmt -w $$(find . -name '*.go' -type f)
@@ -48,3 +48,9 @@ phase8-deploy:
 
 phase8-verify:
 	./scripts/verify-phase8.sh
+
+phase9-deploy:
+	./scripts/deploy-phase9.sh
+
+phase9-verify:
+	./scripts/verify-phase9.sh

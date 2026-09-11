@@ -18,7 +18,7 @@ Phase 8 publishes the Go API and Next.js frontend images to Artifact Registry, a
 | Frontend identity | `eterealink-web@eterealink.iam.gserviceaccount.com` |
 | Public domains | `eterealink.com`, `www.eterealink.com` |
 
-The Cloud SQL instance has a public address but no authorized networks. The API and migration job reach it through Cloud Run's managed Cloud SQL integration. Phase 9 replaces this transitional path with private IP and Direct VPC egress.
+The original Phase 8 Cloud SQL instance has a public address but no authorized networks. The API and migration job reach it through Cloud Run's managed Cloud SQL integration. After this deployment, follow the [Phase 9 private networking guide](./gcp-phase9-private-networking.md) to replace that transitional path with private IP and Direct VPC egress.
 
 ## Deploy
 
@@ -46,7 +46,7 @@ WHERE email = 'owner@example.com';
 
 Do not place an administrator email in application configuration. Future quota changes use the authenticated `PATCH /v1/admin/users/{userID}/quota` endpoint. Authenticated accounts default to 25 GiB total storage; positive per-user overrides are stored in bytes, and `NULL` restores the default.
 
-`API_IMAGE_TAG` and `FRONTEND_IMAGE_TAG` can independently reuse a previously published immutable image when a committed change affects only one container.
+`API_IMAGE_TAG` and `FRONTEND_IMAGE_TAG` can independently reuse a previously published immutable image when a committed change affects only one container. After Phase 9, the script detects a private-only Cloud SQL instance and preserves the Direct VPC attachment instead of restoring the transitional connector.
 
 ## Custom domain
 

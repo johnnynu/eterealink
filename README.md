@@ -10,7 +10,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 8—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, safe browser previews, realtime refreshes, profiles, production containerization, and the complete public Cloud Run deployment—are complete.
+Phases 1 through 9—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, safe browser previews, realtime refreshes, profiles, production containerization, the complete public Cloud Run deployment, and private database networking—are complete.
 
 Implemented:
 
@@ -58,7 +58,7 @@ Implemented:
 - Multi-stage, non-root production images for the Go API/migration runner and standalone Next.js server
 - A health-gated Docker Compose stack that runs PostgreSQL, one-shot migrations, the API, and the frontend in dependency order
 - Immutable API and frontend images in Artifact Registry, one-shot Cloud Run migration executions, and public scale-to-zero Cloud Run services
-- A transitional zonal Cloud SQL PostgreSQL database reached through the managed Cloud SQL connector with its connection string stored in Secret Manager
+- A private-only zonal Cloud SQL PostgreSQL database reached through Direct VPC egress and Private Services Access, with its connection string stored in Secret Manager
 
 ### Per-user storage quotas
 
@@ -305,7 +305,8 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 6.9. Profiles ✅ | Optional unique display names, Google-name fallback, account editing, and realtime collaborator refreshes |
 | 7. Containers ✅ | Multi-stage non-root images, standalone frontend output, migration job, health checks, and a production-like local Compose stack |
 | 8. Cloud Run ✅ | Immutable API/frontend images, migration job, Cloud SQL connector bridge, and complete public application |
-| 9-10. Cloud platform | Private networking and Terraform |
+| 9. Cloud networking ✅ | Custom VPC, regional subnet, Direct VPC egress, Private Services Access, and private-only Cloud SQL |
+| 10. Terraform | Reproducible infrastructure for the deployed cloud platform |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |
 
 The product MVP is complete. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.
@@ -314,8 +315,8 @@ The product MVP is complete. The cloud portfolio milestone adds repeatable infra
 
 - Buckets remain private; access is issued through short-lived signed URLs.
 - Firebase tokens establish identity, while the API and PostgreSQL enforce authorization.
-- PostgreSQL will use private Cloud SQL connectivity rather than a public database endpoint.
-- A dedicated signing service account has bucket-scoped object access; Secret Manager will be added when application secrets are introduced.
+- PostgreSQL uses private Cloud SQL connectivity and has no public database address.
+- A dedicated runtime service account has bucket-scoped object access, and the database connection string is supplied through Secret Manager.
 - Cloud Run scales to zero, and always-on load balancers, NAT gateways, and Kubernetes are excluded unless a real requirement justifies them.
 - Anonymous transfers have file-size and file-count limits plus server-enforced access expiration. Rate limiting and physical object cleanup remain part of the operations phase.
 
