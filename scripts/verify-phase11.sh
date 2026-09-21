@@ -40,12 +40,12 @@ jq --exit-status --arg api "serviceAccount:${API_ACCOUNT}" \
 
 api_policy="$(gcloud iam service-accounts get-iam-policy "${API_ACCOUNT}" --project="${PROJECT_ID}" --format=json)"
 jq --exit-status --arg role "${SIGNER_ROLE}" --arg api "serviceAccount:${API_ACCOUNT}" \
-	'any(.bindings[]; .role == $role and ((.members // []) | index($api) != null)) and all(.bindings[]; .role != "roles/iam.serviceAccountTokenCreator")' \
+	'any(.bindings[]; .role == $role and ((.members // []) | index($api) != null)) and all(.bindings[]; .role != "roles/iam.serviceAccountTokenCreator" or ((.members // []) | index($api) == null))' \
 	<<<"${api_policy}" >/dev/null || fail "API signing IAM is not least privilege"
 
 bucket_policy="$(gcloud storage buckets get-iam-policy "gs://${GCS_BUCKET}" --format=json)"
 jq --exit-status --arg role "${OBJECT_ROLE}" --arg api "serviceAccount:${API_ACCOUNT}" \
-	'any(.bindings[]; .role == $role and ((.members // []) | index($api) != null)) and all(.bindings[]; .role != "roles/storage.objectUser")' \
+	'any(.bindings[]; .role == $role and ((.members // []) | index($api) != null)) and all(.bindings[]; .role != "roles/storage.objectUser" or ((.members // []) | index($api) == null))' \
 	<<<"${bucket_policy}" >/dev/null || fail "bucket runtime IAM is not least privilege"
 
 secret_policy="$(gcloud secrets get-iam-policy "${DATABASE_SECRET}" --project="${PROJECT_ID}" --format=json)"
@@ -68,7 +68,7 @@ jq --exit-status --arg account "${MIGRATION_ACCOUNT}" '[.. | objects | .serviceA
 
 for resource_json in "${api_json}" "${job_json}"; do
 	jq --exit-status --arg secret "${DATABASE_SECRET}" \
-		'[.. | objects | .secretKeyRef? // empty | select((.secret // "") | endswith($secret))] | length > 0 and all(.[]; (.version // "") | test("^[0-9]+$"))' \
+		'[.. | objects | .secretKeyRef? // empty | select((.secret // .name // "") | endswith($secret))] | length > 0 and all(.[]; (.version // .key // "") | test("^[0-9]+$"))' \
 		<<<"${resource_json}" >/dev/null || fail "Cloud Run database secret is not pinned to a numeric version"
 done
 
