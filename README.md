@@ -284,6 +284,8 @@ To complete a browser upload, use the real GCS backend by following the [Phase 2
 
 To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup/firebase-phase4.md). Authentication is optional in local development: when Firebase variables are absent, anonymous transfers continue to work and the sign-in control stays hidden.
 
+Production infrastructure is defined in [`infrastructure`](./infrastructure). Follow the [Phase 10 Terraform guide](./docs/setup/gcp-phase10-terraform.md) to bootstrap remote state, import the resources created by the earlier deployment phases, and review the first plan.
+
 ## Delivery roadmap
 
 | Phase | Outcome |
@@ -302,7 +304,7 @@ To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup
 | 7. Containers ✅ | Multi-stage non-root images, standalone frontend output, migration job, health checks, and a production-like local Compose stack |
 | 8. Cloud Run ✅ | Immutable API/frontend images, migration job, Cloud SQL connector bridge, and complete public application |
 | 9. Cloud networking ✅ | Custom VPC, regional subnet, Direct VPC egress, Private Services Access, and private-only Cloud SQL |
-| 10. Terraform | Reproducible infrastructure for the deployed cloud platform |
+| 10. Terraform ✅ | Reproducible infrastructure, remote state, safe live-resource adoption, and drift verification |
 | 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |
 
 The product MVP is complete. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.

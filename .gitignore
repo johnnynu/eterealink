@@ -14,8 +14,8 @@ frontend/coverage/
 frontend/*.tsbuildinfo
 
 # Terraform
-infrastructure/.terraform/
-infrastructure/*.tfstate
-infrastructure/*.tfstate.*
-infrastructure/*.tfvars
+infrastructure/**/.terraform/
+infrastructure/**/*.tfstate
+infrastructure/**/*.tfstate.*
+infrastructure/**/*.tfvars
 !infrastructure/*.tfvars.example

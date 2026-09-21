@@ -1,0 +1,5 @@
+api_image_tag      = "REPLACE_WITH_12_CHARACTER_GIT_COMMIT"
+frontend_image_tag = "REPLACE_WITH_12_CHARACTER_GIT_COMMIT"
+
+# Increment this number whenever TF_VAR_database_password changes.
+database_credentials_version = 1
