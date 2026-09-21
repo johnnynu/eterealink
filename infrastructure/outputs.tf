@@ -18,6 +18,11 @@ output "artifact_registry_repository" {
   value       = google_artifact_registry_repository.application.name
 }
 
+output "migration_service_account" {
+  description = "Least-privilege migration job identity."
+  value       = google_service_account.migrations.email
+}
+
 output "domain_dns_records" {
   description = "DNS records reported by the Cloud Run domain mappings."
   value = {

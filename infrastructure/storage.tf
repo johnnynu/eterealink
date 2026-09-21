@@ -34,8 +34,17 @@ resource "google_storage_bucket" "files" {
   depends_on = [google_project_service.required["storage.googleapis.com"]]
 }
 
-resource "google_storage_bucket_iam_member" "api_object_user" {
+resource "google_storage_bucket_iam_member" "api_object_runtime" {
   bucket = google_storage_bucket.files.name
-  role   = "roles/storage.objectUser"
+  role   = google_project_iam_custom_role.object_runtime.id
   member = "serviceAccount:${google_service_account.api.email}"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+moved {
+  from = google_storage_bucket_iam_member.api_object_user
+  to   = google_storage_bucket_iam_member.api_object_runtime
 }

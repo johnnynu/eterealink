@@ -76,8 +76,11 @@ func run(logger *slog.Logger) error {
 	}
 
 	server := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           api.NewHandlerWithRealtime(transfers, bundles, files, users, tokenVerifier, db, logger, folders, folderEvents),
+		Addr: cfg.HTTPAddr,
+		Handler: api.NewHandlerWithRealtime(
+			transfers, bundles, files, users, tokenVerifier, db, logger, folders, folderEvents,
+			api.WithAnonymousUploadRateLimit(cfg.AnonymousUploadRateLimit, cfg.AnonymousUploadRateWindow),
+		),
 		BaseContext:       func(net.Listener) context.Context { return workerContext },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

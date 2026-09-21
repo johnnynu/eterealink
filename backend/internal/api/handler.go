@@ -37,6 +37,17 @@ type Handler struct {
 	readiness    ReadinessChecker
 	logger       *slog.Logger
 	folderEvents realtime.FolderEventSubscriber
+	limitUploads *fixedWindowLimiter
+	limitAll     *fixedWindowLimiter
+}
+
+type HandlerOption func(*Handler)
+
+func WithAnonymousUploadRateLimit(maxRequests int, window time.Duration) HandlerOption {
+	return func(handler *Handler) {
+		handler.limitUploads = newFixedWindowLimiter(maxRequests, window, time.Now)
+		handler.limitAll = newFixedWindowLimiter(maxRequests*10, window, time.Now)
+	}
 }
 
 func NewHandler(
@@ -66,8 +77,9 @@ func NewHandlerWithRealtime(
 	logger *slog.Logger,
 	folders *service.Folders,
 	folderEvents realtime.FolderEventSubscriber,
+	options ...HandlerOption,
 ) http.Handler {
-	return newHandler(transfers, bundles, files, users, verifier, readiness, logger, folders, folderEvents)
+	return newHandler(transfers, bundles, files, users, verifier, readiness, logger, folders, folderEvents, options...)
 }
 
 func newHandler(
@@ -80,10 +92,14 @@ func newHandler(
 	logger *slog.Logger,
 	folders *service.Folders,
 	folderEvents realtime.FolderEventSubscriber,
+	options ...HandlerOption,
 ) http.Handler {
 	handler := &Handler{
 		transfers: transfers, bundles: bundles, files: files, users: users, verifier: verifier,
 		readiness: readiness, logger: logger, folders: folders, folderEvents: folderEvents,
+	}
+	for _, option := range options {
+		option(handler)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handler.health)
@@ -115,12 +131,12 @@ func newHandler(
 	mux.HandleFunc("GET /v1/folder-invites/{code}", handler.previewFolderInvite)
 	mux.Handle("POST /v1/folder-invites/{code}/accept", handler.requireAuthentication(http.HandlerFunc(handler.acceptFolderInvite)))
 	mux.Handle("DELETE /v1/folders/{id}/files/{fileID}", handler.requireAuthentication(http.HandlerFunc(handler.removeContributedFile)))
-	mux.HandleFunc("POST /v1/uploads", handler.createAnonymousUpload)
+	mux.Handle("POST /v1/uploads", handler.rateLimitAnonymousUploads(http.HandlerFunc(handler.createAnonymousUpload)))
 	mux.HandleFunc("POST /v1/uploads/{id}/complete", handler.completeUpload)
-	mux.HandleFunc("POST /v1/transfers", handler.createAnonymousTransfer)
+	mux.Handle("POST /v1/transfers", handler.rateLimitAnonymousUploads(http.HandlerFunc(handler.createAnonymousTransfer)))
 	mux.HandleFunc("POST /v1/transfers/{transferID}/files/{fileID}/complete", handler.completeTransferFile)
 	mux.HandleFunc("GET /v1/shares/{code}", handler.resolveShare)
-	return requestLog(logger, recoverPanic(logger, mux))
+	return securityHeaders(requestLog(logger, recoverPanic(logger, mux)))
 }
 
 type authenticatedUserContextKey struct{}
@@ -976,6 +992,17 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func requestLog(logger *slog.Logger, next http.Handler) http.Handler {

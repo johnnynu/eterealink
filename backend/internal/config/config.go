@@ -23,7 +23,20 @@ type Config struct {
 	MaxPersistentStorageBytes int64
 	MaxAnonymousTransferBytes int64
 	MaxAnonymousFiles         int
+	AnonymousUploadRateLimit  int
+	AnonymousUploadRateWindow time.Duration
 }
+
+const (
+	maxAnonymousFileTTL          = 24 * time.Hour
+	maxSignedURLTTL              = 15 * time.Minute
+	maxAnonymousFileBytes        = int64(1024 * 1024 * 1024)
+	maxAnonymousTransferBytes    = int64(1024 * 1024 * 1024)
+	maxAnonymousFiles            = 10
+	maxAnonymousUploadRateLimit  = 60
+	minAnonymousUploadRateWindow = time.Minute
+	maxAnonymousUploadRateWindow = time.Hour
+)
 
 func Load() (Config, error) {
 	anonymousTTL, err := duration("ANONYMOUS_FILE_TTL", 24*time.Hour)
@@ -52,6 +65,36 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	rateLimit, err := intValue("ANONYMOUS_UPLOAD_RATE_LIMIT", 6)
+	if err != nil {
+		return Config{}, err
+	}
+	rateWindow, err := duration("ANONYMOUS_UPLOAD_RATE_WINDOW", time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+
+	if anonymousTTL > maxAnonymousFileTTL {
+		return Config{}, fmt.Errorf("ANONYMOUS_FILE_TTL cannot exceed %s", maxAnonymousFileTTL)
+	}
+	if signedURLTTL > maxSignedURLTTL {
+		return Config{}, fmt.Errorf("SIGNED_URL_TTL cannot exceed %s", maxSignedURLTTL)
+	}
+	if maxFileBytes > maxAnonymousFileBytes {
+		return Config{}, fmt.Errorf("MAX_ANONYMOUS_FILE_BYTES cannot exceed %d", maxAnonymousFileBytes)
+	}
+	if maxTransferBytes > maxAnonymousTransferBytes {
+		return Config{}, fmt.Errorf("MAX_ANONYMOUS_TRANSFER_BYTES cannot exceed %d", maxAnonymousTransferBytes)
+	}
+	if maxFiles > maxAnonymousFiles {
+		return Config{}, fmt.Errorf("MAX_ANONYMOUS_FILES cannot exceed %d", maxAnonymousFiles)
+	}
+	if rateLimit > maxAnonymousUploadRateLimit {
+		return Config{}, fmt.Errorf("ANONYMOUS_UPLOAD_RATE_LIMIT cannot exceed %d", maxAnonymousUploadRateLimit)
+	}
+	if rateWindow < minAnonymousUploadRateWindow || rateWindow > maxAnonymousUploadRateWindow {
+		return Config{}, fmt.Errorf("ANONYMOUS_UPLOAD_RATE_WINDOW must be between %s and %s", minAnonymousUploadRateWindow, maxAnonymousUploadRateWindow)
+	}
 
 	storageBackend := strings.ToLower(value("STORAGE_BACKEND", "development"))
 	if storageBackend != "development" && storageBackend != "gcs" {
@@ -78,6 +121,8 @@ func Load() (Config, error) {
 		MaxPersistentStorageBytes: maxPersistentStorageBytes,
 		MaxAnonymousTransferBytes: maxTransferBytes,
 		MaxAnonymousFiles:         maxFiles,
+		AnonymousUploadRateLimit:  rateLimit,
+		AnonymousUploadRateWindow: rateWindow,
 	}, nil
 }
 

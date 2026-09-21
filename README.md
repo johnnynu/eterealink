@@ -6,7 +6,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 9—the local backend foundation, direct Cloud Storage transfer layer, anonymous sharing experience, Firebase authentication, persistent-file library, virtual folders, folder collaboration, landing-page account feature introduction, safe browser previews, realtime refreshes, profiles, production containerization, the complete public Cloud Run deployment, and private database networking—are complete.
+Phases 1 through 11—the product foundation, complete public Cloud Run deployment, private database networking, Terraform adoption, and production security baseline—are complete.
 
 Implemented:
 
@@ -55,6 +55,9 @@ Implemented:
 - A health-gated Docker Compose stack that runs PostgreSQL, one-shot migrations, the API, and the frontend in dependency order
 - Immutable API and frontend images in Artifact Registry, one-shot Cloud Run migration executions, and public scale-to-zero Cloud Run services
 - A private-only zonal Cloud SQL PostgreSQL database reached through Direct VPC egress and Private Services Access, with its connection string stored in Secret Manager
+- Separate API, frontend, and database-migration identities with exact object and signing permissions and pinned Secret Manager versions
+- Bounded anonymous upload creation with per-client and per-instance rate limits, `429` retry guidance, and hard configuration ceilings
+- Browser and API response protections for framing, MIME sniffing, referrers, transport security, feature access, and signed-URL caching
 
 ### Per-user storage quotas
 
@@ -284,7 +287,7 @@ To complete a browser upload, use the real GCS backend by following the [Phase 2
 
 To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup/firebase-phase4.md). Authentication is optional in local development: when Firebase variables are absent, anonymous transfers continue to work and the sign-in control stays hidden.
 
-Production infrastructure is defined in [`infrastructure`](./infrastructure). Follow the [Phase 10 Terraform guide](./docs/setup/gcp-phase10-terraform.md) to bootstrap remote state, import the resources created by the earlier deployment phases, and review the first plan.
+Production infrastructure is defined in [`infrastructure`](./infrastructure). Follow the [Phase 10 Terraform guide](./docs/setup/gcp-phase10-terraform.md) to bootstrap or adopt it, and the [Phase 11 security guide](./docs/setup/gcp-phase11-security.md) for the current least-privilege baseline.
 
 ## Delivery roadmap
 
@@ -305,7 +308,8 @@ Production infrastructure is defined in [`infrastructure`](./infrastructure). Fo
 | 8. Cloud Run ✅ | Immutable API/frontend images, migration job, Cloud SQL connector bridge, and complete public application |
 | 9. Cloud networking ✅ | Custom VPC, regional subnet, Direct VPC egress, Private Services Access, and private-only Cloud SQL |
 | 10. Terraform ✅ | Reproducible infrastructure, remote state, safe live-resource adoption, and drift verification |
-| 11-14. Operations | Security hardening, CI/CD, monitoring, and lifecycle cleanup |
+| 11. Security hardening ✅ | Least-privilege identities and custom roles, pinned secrets, bounded upload creation, and response security headers |
+| 12-14. Operations | CI/CD, monitoring, and lifecycle cleanup |
 
 The product MVP is complete. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.
 
@@ -314,8 +318,8 @@ The product MVP is complete. The cloud portfolio milestone adds repeatable infra
 - Buckets remain private; access is issued through short-lived signed URLs.
 - Firebase tokens establish identity, while the API and PostgreSQL enforce authorization.
 - PostgreSQL uses private Cloud SQL connectivity and has no public database address.
-- A dedicated runtime service account has bucket-scoped object access, and the database connection string is supplied through Secret Manager.
+- Separate runtime and migration identities receive only their exact bucket, signing, or secret permissions; the database secret is pinned to a numeric version.
 - Cloud Run scales to zero, and always-on load balancers, NAT gateways, and Kubernetes are excluded unless a real requirement justifies them.
-- Anonymous transfers have file-size and file-count limits plus server-enforced access expiration. Rate limiting and physical object cleanup remain part of the operations phase.
+- Anonymous transfers have hard file-size, file-count, signed-URL, and expiration ceilings. Creation is rate-limited per client and per API instance. Physical object cleanup remains in Phase 14.
 
 Architecture decisions are recorded under [`docs/architecture`](./docs/architecture/).

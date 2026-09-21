@@ -6,7 +6,7 @@ resource "google_cloud_run_v2_job" "migrations" {
 
   template {
     template {
-      service_account       = google_service_account.api.email
+      service_account       = google_service_account.migrations.email
       timeout               = "600s"
       max_retries           = 1
       execution_environment = "EXECUTION_ENVIRONMENT_GEN2"
@@ -38,7 +38,7 @@ resource "google_cloud_run_v2_job" "migrations" {
           value_source {
             secret_key_ref {
               secret  = google_secret_manager_secret.database_url.secret_id
-              version = "latest"
+              version = google_secret_manager_secret_version.database_url.version
             }
           }
         }
@@ -57,7 +57,7 @@ resource "google_cloud_run_v2_job" "migrations" {
   depends_on = [
     google_artifact_registry_repository.application,
     google_project_service.required["run.googleapis.com"],
-    google_secret_manager_secret_iam_member.api_database_url,
+    google_secret_manager_secret_iam_member.migrations_database_url,
     google_secret_manager_secret_version.database_url,
   ]
 
@@ -112,7 +112,7 @@ resource "google_cloud_run_v2_service" "api" {
         value_source {
           secret_key_ref {
             secret  = google_secret_manager_secret.database_url.secret_id
-            version = "latest"
+            version = google_secret_manager_secret_version.database_url.version
           }
         }
       }
