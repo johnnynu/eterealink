@@ -1,0 +1,196 @@
+name: Deploy production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+env:
+  PROJECT_ID: eterealink
+  PROJECT_NUMBER: "300331831616"
+  REGION: us-west1
+  REPOSITORY: eterealink
+  WIF_PROVIDER: projects/300331831616/locations/global/workloadIdentityPools/aurealink-github/providers/github
+  DEPLOY_SERVICE_ACCOUNT: eterealink-deploy@eterealink.iam.gserviceaccount.com
+  API_BASE_URL: https://eterealink-api-300331831616.us-west1.run.app
+
+jobs:
+  ci:
+    name: Required checks
+    uses: ./.github/workflows/ci.yml
+
+  build-api:
+    name: Publish API image
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+          token_format: access_token
+      - uses: google-github-actions/setup-gcloud@v3
+      - id: image
+        name: Check immutable image
+        env:
+          IMAGE_URI: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/api:${{ github.sha }}
+        run: |
+          if gcloud artifacts docker images describe "${IMAGE_URI}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Log in to Artifact Registry
+        if: steps.image.outputs.exists != 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - uses: docker/setup-buildx-action@v4
+        if: steps.image.outputs.exists != 'true'
+      - name: Build and push API
+        if: steps.image.outputs.exists != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: backend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/api:${{ github.sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+  build-frontend:
+    name: Publish frontend image
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate public Firebase build variables
+        env:
+          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ vars.NEXT_PUBLIC_FIREBASE_API_KEY }}
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: ${{ vars.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: ${{ vars.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+          NEXT_PUBLIC_FIREBASE_APP_ID: ${{ vars.NEXT_PUBLIC_FIREBASE_APP_ID }}
+        run: |
+          for name in \
+            NEXT_PUBLIC_FIREBASE_API_KEY \
+            NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN \
+            NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET \
+            NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID \
+            NEXT_PUBLIC_FIREBASE_APP_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing GitHub repository variable: ${name}" >&2
+              exit 1
+            fi
+          done
+      - id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+          token_format: access_token
+      - uses: google-github-actions/setup-gcloud@v3
+      - id: image
+        name: Check immutable image
+        env:
+          IMAGE_URI: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/frontend:${{ github.sha }}
+        run: |
+          if gcloud artifacts docker images describe "${IMAGE_URI}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Log in to Artifact Registry
+        if: steps.image.outputs.exists != 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGION }}-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - uses: docker/setup-buildx-action@v4
+        if: steps.image.outputs.exists != 'true'
+      - name: Build and push frontend
+        if: steps.image.outputs.exists != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: frontend
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/frontend:${{ github.sha }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+          build-args: |
+            API_BASE_URL=${{ env.API_BASE_URL }}
+            NEXT_PUBLIC_MAX_UPLOAD_BYTES=1073741824
+            NEXT_PUBLIC_MAX_TRANSFER_BYTES=1073741824
+            NEXT_PUBLIC_MAX_FILES=10
+            NEXT_PUBLIC_FIREBASE_API_KEY=${{ vars.NEXT_PUBLIC_FIREBASE_API_KEY }}
+            NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=${{ vars.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN }}
+            NEXT_PUBLIC_FIREBASE_PROJECT_ID=${{ env.PROJECT_ID }}
+            NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=${{ vars.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET }}
+            NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=${{ vars.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID }}
+            NEXT_PUBLIC_FIREBASE_APP_ID=${{ vars.NEXT_PUBLIC_FIREBASE_APP_ID }}
+
+  deploy:
+    name: Apply and verify
+    needs:
+      - build-api
+      - build-frontend
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_VAR_api_image_tag: ${{ github.sha }}
+      TF_VAR_frontend_image_tag: ${{ github.sha }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.3
+      - name: Initialize Terraform
+        run: |
+          terraform -chdir=infrastructure init -input=false \
+            -backend-config='bucket=eterealink-terraform-state' \
+            -backend-config='prefix=production'
+      - name: Recover write-only database input
+        run: |
+          database_url="$(gcloud secrets versions access latest --secret=eterealink-database-url --project="${PROJECT_ID}")"
+          database_password="$(printf '%s' "${database_url}" | sed -E 's#^postgres://[^:]+:([^@]+)@.*#\1#')"
+          if [[ -z "${database_password}" || "${database_password}" == "${database_url}" ]]; then
+            echo "Could not recover the database password from the managed URL" >&2
+            exit 1
+          fi
+          echo "::add-mask::${database_password}"
+          echo "TF_VAR_database_password=${database_password}" >> "${GITHUB_ENV}"
+      - name: Plan production deployment
+        run: terraform -chdir=infrastructure plan -input=false -out=phase12.tfplan
+      - name: Show production plan
+        run: terraform -chdir=infrastructure show -no-color phase12.tfplan
+      - name: Apply production deployment
+        run: terraform -chdir=infrastructure apply -input=false -auto-approve phase12.tfplan
+      - name: Run database migrations
+        run: gcloud run jobs execute eterealink-migrate --project="${PROJECT_ID}" --region="${REGION}" --wait
+      - name: Verify production
+        run: make phase12-verify

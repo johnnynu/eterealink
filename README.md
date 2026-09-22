@@ -6,7 +6,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 11—the product foundation, complete public Cloud Run deployment, private database networking, Terraform adoption, and production security baseline—are complete.
+Phases 1 through 12—the product foundation, complete public Cloud Run deployment, private database networking, Terraform adoption, production security baseline, and keyless CI/CD—are complete.
 
 Implemented:
 
@@ -58,6 +58,9 @@ Implemented:
 - Separate API, frontend, and database-migration identities with exact object and signing permissions and pinned Secret Manager versions
 - Bounded anonymous upload creation with per-client and per-instance rate limits, `429` retry guidance, and hard configuration ceilings
 - Browser and API response protections for framing, MIME sniffing, referrers, transport security, feature access, and signed-URL caching
+- Pull-request CI for Go formatting/tests, frontend lint/tests/builds, shell syntax, and Terraform formatting/validation
+- Keyless main-branch GitHub deployments through repository- and branch-restricted Workload Identity Federation
+- Parallel immutable API/frontend image builds, Terraform-planned Cloud Run releases, migration execution, and production verification
 
 ### Per-user storage quotas
 
@@ -287,7 +290,7 @@ To complete a browser upload, use the real GCS backend by following the [Phase 2
 
 To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup/firebase-phase4.md). Authentication is optional in local development: when Firebase variables are absent, anonymous transfers continue to work and the sign-in control stays hidden.
 
-Production infrastructure is defined in [`infrastructure`](./infrastructure). Follow the [Phase 10 Terraform guide](./docs/setup/gcp-phase10-terraform.md) to bootstrap or adopt it, and the [Phase 11 security guide](./docs/setup/gcp-phase11-security.md) for the current least-privilege baseline.
+Production infrastructure is defined in [`infrastructure`](./infrastructure). Follow the [Phase 10 Terraform guide](./docs/setup/gcp-phase10-terraform.md) to bootstrap or adopt it, the [Phase 11 security guide](./docs/setup/gcp-phase11-security.md) for the least-privilege runtime baseline, and the [Phase 12 CI/CD guide](./docs/setup/gcp-phase12-cicd.md) for keyless GitHub deployment setup.
 
 ## Delivery roadmap
 
@@ -309,7 +312,8 @@ Production infrastructure is defined in [`infrastructure`](./infrastructure). Fo
 | 9. Cloud networking ✅ | Custom VPC, regional subnet, Direct VPC egress, Private Services Access, and private-only Cloud SQL |
 | 10. Terraform ✅ | Reproducible infrastructure, remote state, safe live-resource adoption, and drift verification |
 | 11. Security hardening ✅ | Least-privilege identities and custom roles, pinned secrets, bounded upload creation, and response security headers |
-| 12-14. Operations | CI/CD, monitoring, and lifecycle cleanup |
+| 12. CI/CD ✅ | Pull-request checks and keyless main-branch image build, Terraform deployment, migration, and verification |
+| 13-14. Operations | Monitoring and lifecycle cleanup |
 
 The product MVP is complete. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.
 

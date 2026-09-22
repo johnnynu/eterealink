@@ -12,7 +12,10 @@ fail() {
 
 command -v "${TERRAFORM_BIN}" >/dev/null 2>&1 || fail "Terraform is unavailable: ${TERRAFORM_BIN}"
 [[ -n "${TF_VAR_database_password:-}" ]] || fail "TF_VAR_database_password must be set for Terraform verification"
-[[ -f "${INFRASTRUCTURE_DIR}/terraform.tfvars" ]] || fail "infrastructure/terraform.tfvars is unavailable"
+if [[ ! -f "${INFRASTRUCTURE_DIR}/terraform.tfvars" ]]; then
+	[[ -n "${TF_VAR_api_image_tag:-}" && -n "${TF_VAR_frontend_image_tag:-}" ]] \
+		|| fail "infrastructure/terraform.tfvars is unavailable and Terraform image-tag variables are unset"
+fi
 
 "${TERRAFORM_BIN}" -chdir="${INFRASTRUCTURE_DIR}" fmt -check -recursive
 "${TERRAFORM_BIN}" -chdir="${INFRASTRUCTURE_DIR}" validate

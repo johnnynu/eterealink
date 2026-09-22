@@ -248,18 +248,6 @@ export function PersistentFileLibrary() {
 		memberPanelOpen: false,
 		role: undefined as FolderAccess["role"] | undefined,
 	});
-	libraryView.current = {
-		folderID: currentFolder?.folder.id,
-		scope,
-		search: searchQuery,
-		sort,
-		filter,
-		cursor: cursorHistory[page - 1] ?? "",
-		memberPanelOpen,
-		role: currentFolder?.role,
-	};
-	displayedFolderSnapshot.current = folderSnapshot(currentFolder, breadcrumbs, folders, files, pendingUploads, summary, totalCount, nextCursor);
-	displayedAccessSnapshot.current = folderAccessSnapshot(members, folderInvites);
 	const canUpload = scope === "owned" || (scope === "shared" && currentFolder?.role === "CONTRIBUTOR");
 	const uploadBusy = uploading || Boolean(recoveringID) || Boolean(deletingRecoveryID);
 	const visibleRecoveries = recoveries.filter((record) => record.userId === user?.id
@@ -267,6 +255,44 @@ export function PersistentFileLibrary() {
 	const visibleServerPending = pendingUploads.filter((file) =>
 		!recoveries.some((record) => record.fileId === file.id)
 		&& !uploadQueue.some((item) => item.fileId === file.id));
+
+	function resetLibraryView() {
+		setOpenShareID("");
+		setConfirmDeleteID("");
+		setCopiedShareID("");
+	}
+
+	function dismissFolderUpdateToast() {
+		if (folderUpdateToastTimer.current) {
+			clearTimeout(folderUpdateToastTimer.current);
+			folderUpdateToastTimer.current = null;
+		}
+		setFolderUpdateToast(0);
+	}
+
+	function showFolderUpdateToast() {
+		if (folderUpdateToastTimer.current) clearTimeout(folderUpdateToastTimer.current);
+		setFolderUpdateToast((current) => current + 1);
+		folderUpdateToastTimer.current = setTimeout(() => {
+			setFolderUpdateToast(0);
+			folderUpdateToastTimer.current = null;
+		}, 4_200);
+	}
+
+	useEffect(() => {
+		libraryView.current = {
+			folderID: currentFolder?.folder.id,
+			scope,
+			search: searchQuery,
+			sort,
+			filter,
+			cursor: cursorHistory[page - 1] ?? "",
+			memberPanelOpen,
+			role: currentFolder?.role,
+		};
+		displayedFolderSnapshot.current = folderSnapshot(currentFolder, breadcrumbs, folders, files, pendingUploads, summary, totalCount, nextCursor);
+		displayedAccessSnapshot.current = folderAccessSnapshot(members, folderInvites);
+	}, [breadcrumbs, currentFolder, cursorHistory, files, filter, folderInvites, folders, memberPanelOpen, members, nextCursor, page, pendingUploads, scope, searchQuery, sort, summary, totalCount]);
 
 	useEffect(() => {
 		let active = true;
@@ -413,7 +439,9 @@ export function PersistentFileLibrary() {
 		}
 	}
 
-	openLocationRef.current = openLocation;
+	useEffect(() => {
+		openLocationRef.current = openLocation;
+	});
 
 	async function refreshCurrentFolder(announceChange = false) {
 		if (backgroundRefreshInFlight.current) {
@@ -496,24 +524,9 @@ export function PersistentFileLibrary() {
 		}
 	}
 
-	refreshCurrentFolderRef.current = refreshCurrentFolder;
-
-	function dismissFolderUpdateToast() {
-		if (folderUpdateToastTimer.current) {
-			clearTimeout(folderUpdateToastTimer.current);
-			folderUpdateToastTimer.current = null;
-		}
-		setFolderUpdateToast(0);
-	}
-
-	function showFolderUpdateToast() {
-		if (folderUpdateToastTimer.current) clearTimeout(folderUpdateToastTimer.current);
-		setFolderUpdateToast((current) => current + 1);
-		folderUpdateToastTimer.current = setTimeout(() => {
-			setFolderUpdateToast(0);
-			folderUpdateToastTimer.current = null;
-		}, 4_200);
-	}
+	useEffect(() => {
+		refreshCurrentFolderRef.current = refreshCurrentFolder;
+	});
 
 	useEffect(() => {
 		function profileUpdateStarted() {
@@ -1254,12 +1267,6 @@ export function PersistentFileLibrary() {
 	const readyStoredBytes = summary && scope === "owned" && !currentFolder
 		? Math.max(0, summary.totalBytes - (summary.pendingBytes ?? 0))
 		: summary?.totalBytes ?? 0;
-
-  function resetLibraryView() {
-    setOpenShareID("");
-    setConfirmDeleteID("");
-    setCopiedShareID("");
-  }
 
 	async function goToNextPage() {
 		if (!nextCursor) return;

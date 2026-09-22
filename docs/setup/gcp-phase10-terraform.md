@@ -21,7 +21,7 @@ Terraform uses Application Default Credentials. The `gcloud` user credentials ar
 
 ## Bootstrap remote state
 
-The bootstrap configuration has intentionally separate local state. Create the dedicated versioned state bucket once:
+The bootstrap configuration has intentionally separate local state. Create the dedicated versioned state bucket once. As of Phase 12, this bootstrap root also owns the keyless GitHub deployment identity and its access to the state bucket:
 
 ```bash
 terraform -chdir=infrastructure/bootstrap init
@@ -36,7 +36,7 @@ terraform -chdir=infrastructure init \
   -backend-config='prefix=production'
 ```
 
-Do not delete `infrastructure/bootstrap/terraform.tfstate`; it is ignored by Git and remains the ownership record for the backend bucket.
+Do not delete `infrastructure/bootstrap/terraform.tfstate`; it is ignored by Git and remains the ownership record for the backend bucket and CI/CD trust. Existing installations should apply the bootstrap root again by following the [Phase 12 CI/CD guide](./gcp-phase12-cicd.md).
 
 ## Prepare inputs
 

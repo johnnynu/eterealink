@@ -19,3 +19,6 @@ infrastructure/**/*.tfstate
 infrastructure/**/*.tfstate.*
 infrastructure/**/*.tfvars
 !infrastructure/*.tfvars.example
+
+# Temporary credentials created by google-github-actions/auth
+gha-creds-*.json
