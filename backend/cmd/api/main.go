@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -21,11 +22,30 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := newLogger(os.Stdout)
 	if err := run(logger); err != nil {
 		logger.Error("api stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func newLogger(output io.Writer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(output, &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, attribute slog.Attr) slog.Attr {
+			switch attribute.Key {
+			case slog.TimeKey:
+				attribute.Key = "timestamp"
+			case slog.LevelKey:
+				attribute.Key = "severity"
+				if attribute.Value.Any() == slog.LevelWarn {
+					attribute.Value = slog.StringValue("WARNING")
+				}
+			case slog.MessageKey:
+				attribute.Key = "message"
+			}
+			return attribute
+		},
+	}))
 }
 
 func run(logger *slog.Logger) error {
@@ -80,6 +100,7 @@ func run(logger *slog.Logger) error {
 		Handler: api.NewHandlerWithRealtime(
 			transfers, bundles, files, users, tokenVerifier, db, logger, folders, folderEvents,
 			api.WithAnonymousUploadRateLimit(cfg.AnonymousUploadRateLimit, cfg.AnonymousUploadRateWindow),
+			api.WithGoogleCloudProject(cfg.FirebaseProjectID),
 		),
 		BaseContext:       func(net.Listener) context.Context { return workerContext },
 		ReadHeaderTimeout: 5 * time.Second,

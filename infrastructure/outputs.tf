@@ -30,3 +30,18 @@ output "domain_dns_records" {
     domain => mapping.status[0].resource_records
   }
 }
+
+output "monitoring_dashboard" {
+  description = "Terraform-managed production monitoring dashboard resource."
+  value       = google_monitoring_dashboard.application.id
+}
+
+output "frontend_uptime_check" {
+  description = "Public frontend uptime check resource."
+  value       = google_monitoring_uptime_check_config.frontend.name
+}
+
+output "frontend_availability_alert" {
+  description = "Alert policy for sustained public frontend failures."
+  value       = google_monitoring_alert_policy.frontend_unavailable.name
+}

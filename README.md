@@ -290,7 +290,7 @@ To complete a browser upload, use the real GCS backend by following the [Phase 2
 
 To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup/firebase-phase4.md). Authentication is optional in local development: when Firebase variables are absent, anonymous transfers continue to work and the sign-in control stays hidden.
 
-Production infrastructure is defined in [`infrastructure`](./infrastructure). Follow the [Phase 10 Terraform guide](./docs/setup/gcp-phase10-terraform.md) to bootstrap or adopt it, the [Phase 11 security guide](./docs/setup/gcp-phase11-security.md) for the least-privilege runtime baseline, and the [Phase 12 CI/CD guide](./docs/setup/gcp-phase12-cicd.md) for keyless GitHub deployment setup.
+Production infrastructure is defined in [`infrastructure`](./infrastructure). Follow the [Phase 10 Terraform guide](./docs/setup/gcp-phase10-terraform.md) to bootstrap or adopt it, the [Phase 11 security guide](./docs/setup/gcp-phase11-security.md) for the least-privilege runtime baseline, the [Phase 12 CI/CD guide](./docs/setup/gcp-phase12-cicd.md) for keyless GitHub deployment setup, and the [Phase 13 observability guide](./docs/setup/gcp-phase13-observability.md) for monitoring and incident response.
 
 ## Delivery roadmap
 
@@ -313,7 +313,8 @@ Production infrastructure is defined in [`infrastructure`](./infrastructure). Fo
 | 10. Terraform ✅ | Reproducible infrastructure, remote state, safe live-resource adoption, and drift verification |
 | 11. Security hardening ✅ | Least-privilege identities and custom roles, pinned secrets, bounded upload creation, and response security headers |
 | 12. CI/CD ✅ | Pull-request checks and keyless main-branch image build, Terraform deployment, migration, and verification |
-| 13-14. Operations | Monitoring and lifecycle cleanup |
+| 13. Observability ✅ | Public uptime checks, actionable availability alerting, an operations dashboard, and trace-correlated structured logs |
+| 14. Lifecycle automation | Expired anonymous object and metadata cleanup |
 
 The product MVP is complete. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.
 
@@ -323,6 +324,7 @@ The product MVP is complete. The cloud portfolio milestone adds repeatable infra
 - Firebase tokens establish identity, while the API and PostgreSQL enforce authorization.
 - PostgreSQL uses private Cloud SQL connectivity and has no public database address.
 - Separate runtime and migration identities receive only their exact bucket, signing, or secret permissions; the database secret is pinned to a numeric version.
+- A Terraform-managed uptime check, availability alert, and production dashboard cover the public domain and both Cloud Run services.
 - Cloud Run scales to zero, and always-on load balancers, NAT gateways, and Kubernetes are excluded unless a real requirement justifies them.
 - Anonymous transfers have hard file-size, file-count, signed-URL, and expiration ceilings. Creation is rate-limited per client and per API instance. Physical object cleanup remains in Phase 14.
 

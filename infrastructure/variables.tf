@@ -87,3 +87,14 @@ variable "request_timeout_seconds" {
   type        = number
   default     = 300
 }
+
+variable "alert_notification_email" {
+  description = "Optional email address for production alert notifications. The channel must be verified after its first apply."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.alert_notification_email == "" || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.alert_notification_email))
+    error_message = "alert_notification_email must be empty or a valid email address."
+  }
+}

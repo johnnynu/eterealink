@@ -3,3 +3,6 @@ frontend_image_tag = "REPLACE_WITH_12_CHARACTER_GIT_COMMIT"
 
 # Increment this number whenever TF_VAR_database_password changes.
 database_credentials_version = 1
+
+# Optional. Cloud Monitoring sends a verification email after the first apply.
+# alert_notification_email = "you@example.com"

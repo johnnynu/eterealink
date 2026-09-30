@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -39,6 +42,7 @@ type Handler struct {
 	folderEvents realtime.FolderEventSubscriber
 	limitUploads *fixedWindowLimiter
 	limitAll     *fixedWindowLimiter
+	cloudProject string
 }
 
 type HandlerOption func(*Handler)
@@ -47,6 +51,12 @@ func WithAnonymousUploadRateLimit(maxRequests int, window time.Duration) Handler
 	return func(handler *Handler) {
 		handler.limitUploads = newFixedWindowLimiter(maxRequests, window, time.Now)
 		handler.limitAll = newFixedWindowLimiter(maxRequests*10, window, time.Now)
+	}
+}
+
+func WithGoogleCloudProject(projectID string) HandlerOption {
+	return func(handler *Handler) {
+		handler.cloudProject = strings.TrimSpace(projectID)
 	}
 }
 
@@ -136,7 +146,7 @@ func newHandler(
 	mux.Handle("POST /v1/transfers", handler.rateLimitAnonymousUploads(http.HandlerFunc(handler.createAnonymousTransfer)))
 	mux.HandleFunc("POST /v1/transfers/{transferID}/files/{fileID}/complete", handler.completeTransferFile)
 	mux.HandleFunc("GET /v1/shares/{code}", handler.resolveShare)
-	return securityHeaders(requestLog(logger, recoverPanic(logger, mux)))
+	return securityHeaders(requestLog(logger, handler.cloudProject, recoverPanic(logger, mux)))
 }
 
 type authenticatedUserContextKey struct{}
@@ -1005,12 +1015,138 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-func requestLog(logger *slog.Logger, next http.Handler) http.Handler {
+type responseLogWriter struct {
+	http.ResponseWriter
+	status      int
+	bytes       int
+	wroteHeader bool
+}
+
+func (w *responseLogWriter) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *responseLogWriter) Write(body []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	written, err := w.ResponseWriter.Write(body)
+	w.bytes += written
+	return written, err
+}
+
+func (w *responseLogWriter) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func (w *responseLogWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func requestLog(logger *slog.Logger, cloudProject string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
-		next.ServeHTTP(w, r)
-		logger.Info("request", "method", r.Method, "path", r.URL.Path, "duration_ms", time.Since(started).Milliseconds())
+		requestID := requestID(r)
+		w.Header().Set("X-Request-ID", requestID)
+		response := &responseLogWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(response, r)
+
+		if response.status < http.StatusBadRequest && (r.URL.Path == "/health" || r.URL.Path == "/healthz") {
+			return
+		}
+
+		duration := time.Since(started)
+		attributes := []any{
+			"request_id", requestID,
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", response.status,
+			"response_bytes", response.bytes,
+			"duration_ms", duration.Milliseconds(),
+			slog.Group("httpRequest",
+				"requestMethod", r.Method,
+				"requestUrl", r.URL.Path,
+				"status", response.status,
+				"responseSize", response.bytes,
+				"latency", fmt.Sprintf("%.9fs", duration.Seconds()),
+				"protocol", r.Proto,
+			),
+		}
+		if traceID, spanID, sampled, ok := cloudTraceContext(r.Header.Get("X-Cloud-Trace-Context")); ok {
+			attributes = append(attributes, "trace_id", traceID)
+			if cloudProject != "" {
+				attributes = append(attributes,
+					"logging.googleapis.com/trace", "projects/"+cloudProject+"/traces/"+traceID,
+					"logging.googleapis.com/spanId", spanID,
+					"logging.googleapis.com/trace_sampled", sampled,
+				)
+			}
+		}
+
+		level := slog.LevelInfo
+		if response.status >= http.StatusInternalServerError {
+			level = slog.LevelError
+		} else if response.status == http.StatusTooManyRequests {
+			level = slog.LevelWarn
+		}
+		logger.Log(r.Context(), level, "request", attributes...)
 	})
+}
+
+func requestID(r *http.Request) string {
+	if candidate := strings.TrimSpace(r.Header.Get("X-Request-ID")); validRequestID(candidate) {
+		return candidate
+	}
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err == nil {
+		return hex.EncodeToString(bytes)
+	}
+	return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+}
+
+func validRequestID(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || strings.ContainsRune("-._", character) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func cloudTraceContext(value string) (traceID, spanID string, sampled, ok bool) {
+	traceAndOptions := strings.SplitN(strings.TrimSpace(value), ";", 2)
+	traceAndSpan := strings.SplitN(traceAndOptions[0], "/", 2)
+	if len(traceAndSpan) != 2 || len(traceAndSpan[0]) != 32 {
+		return "", "", false, false
+	}
+	if _, err := hex.DecodeString(traceAndSpan[0]); err != nil {
+		return "", "", false, false
+	}
+	span, err := strconv.ParseUint(traceAndSpan[1], 10, 64)
+	if err != nil {
+		return "", "", false, false
+	}
+	if len(traceAndOptions) == 2 {
+		for _, option := range strings.Split(traceAndOptions[1], ",") {
+			if strings.TrimSpace(option) == "o=1" {
+				sampled = true
+			}
+		}
+	}
+	return strings.ToLower(traceAndSpan[0]), fmt.Sprintf("%016x", span), sampled, true
 }
 
 func recoverPanic(logger *slog.Logger, next http.Handler) http.Handler {

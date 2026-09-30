@@ -155,6 +155,7 @@ jobs:
     environment: production
     env:
       TF_IN_AUTOMATION: "true"
+      TF_VAR_alert_notification_email: ${{ vars.ALERT_NOTIFICATION_EMAIL }}
       TF_VAR_api_image_tag: ${{ github.sha }}
       TF_VAR_frontend_image_tag: ${{ github.sha }}
       IMAGE_TAG: ${{ github.sha }}
@@ -185,12 +186,12 @@ jobs:
           echo "::add-mask::${database_password}"
           echo "TF_VAR_database_password=${database_password}" >> "${GITHUB_ENV}"
       - name: Plan production deployment
-        run: terraform -chdir=infrastructure plan -input=false -out=phase12.tfplan
+        run: terraform -chdir=infrastructure plan -input=false -out=production.tfplan
       - name: Show production plan
-        run: terraform -chdir=infrastructure show -no-color phase12.tfplan
+        run: terraform -chdir=infrastructure show -no-color production.tfplan
       - name: Apply production deployment
-        run: terraform -chdir=infrastructure apply -input=false -auto-approve phase12.tfplan
+        run: terraform -chdir=infrastructure apply -input=false -auto-approve production.tfplan
       - name: Run database migrations
         run: gcloud run jobs execute eterealink-migrate --project="${PROJECT_ID}" --region="${REGION}" --wait
       - name: Verify production
-        run: make phase12-verify
+        run: make phase13-verify

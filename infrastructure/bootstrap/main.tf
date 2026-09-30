@@ -106,6 +106,46 @@ resource "google_project_iam_member" "deploy" {
   member  = "serviceAccount:${google_service_account.deploy.email}"
 }
 
+resource "google_project_iam_custom_role" "observability_deployer" {
+  project     = var.project_id
+  role_id     = "aureaLinkObservabilityDeployer"
+  title       = "Aurea Link Observability Deployer"
+  description = "Manages only Aurea Link monitoring configuration and reads application logs for deployment verification."
+  permissions = [
+    "logging.logEntries.list",
+    "monitoring.alertPolicies.create",
+    "monitoring.alertPolicies.delete",
+    "monitoring.alertPolicies.get",
+    "monitoring.alertPolicies.list",
+    "monitoring.alertPolicies.update",
+    "monitoring.dashboards.create",
+    "monitoring.dashboards.delete",
+    "monitoring.dashboards.get",
+    "monitoring.dashboards.list",
+    "monitoring.dashboards.update",
+    "monitoring.notificationChannelDescriptors.get",
+    "monitoring.notificationChannelDescriptors.list",
+    "monitoring.notificationChannels.create",
+    "monitoring.notificationChannels.delete",
+    "monitoring.notificationChannels.get",
+    "monitoring.notificationChannels.list",
+    "monitoring.notificationChannels.update",
+    "monitoring.uptimeCheckConfigs.create",
+    "monitoring.uptimeCheckConfigs.delete",
+    "monitoring.uptimeCheckConfigs.get",
+    "monitoring.uptimeCheckConfigs.list",
+    "monitoring.uptimeCheckConfigs.update",
+  ]
+
+  depends_on = [google_project_service.bootstrap["iam.googleapis.com"]]
+}
+
+resource "google_project_iam_member" "deploy_observability" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.observability_deployer.id
+  member  = "serviceAccount:${google_service_account.deploy.email}"
+}
+
 resource "google_storage_bucket_iam_member" "deploy_state" {
   bucket = google_storage_bucket.terraform_state.name
   role   = "roles/storage.objectAdmin"
