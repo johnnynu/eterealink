@@ -95,6 +95,20 @@ type AnonymousTransfer struct {
 	ExpiresAt         time.Time      `json:"expiresAt"`
 }
 
+type AnonymousCleanupKind string
+
+const (
+	AnonymousCleanupFile     AnonymousCleanupKind = "FILE"
+	AnonymousCleanupTransfer AnonymousCleanupKind = "TRANSFER"
+)
+
+type ExpiredAnonymousContent struct {
+	Kind        AnonymousCleanupKind
+	ID          string
+	ExpiresAt   time.Time
+	StorageKeys []string
+}
+
 type SharedTransfer struct {
 	Share    ShareLink         `json:"share"`
 	Transfer AnonymousTransfer `json:"transfer"`

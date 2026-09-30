@@ -194,4 +194,4 @@ jobs:
       - name: Run database migrations
         run: gcloud run jobs execute eterealink-migrate --project="${PROJECT_ID}" --region="${REGION}" --wait
       - name: Verify production
-        run: make phase13-verify
+        run: make phase14-verify

@@ -26,4 +26,4 @@ A signed download URL can remain usable without another API authorization check.
 
 The browser requires CORS access only to the configured private storage bucket, whose allowed local origins are maintained in `config/gcs-cors.json`. Deployments must set `API_BASE_URL` for the Next.js server and add the exact deployed frontend origin to the bucket policy.
 
-Canceled or failed uploads can leave `PENDING` metadata and partial storage state until lifecycle cleanup is implemented in Phase 14. The API never marks those files `READY`, so their share links cannot resolve.
+Canceled or failed uploads can leave `PENDING` metadata and partial storage state. The API never marks those files `READY`, so their share links cannot resolve; the Phase 14 lifecycle job removes their expired objects and metadata.

@@ -66,7 +66,7 @@ Configure branch protection for `main` to require the three pull-request checks:
 2. Build API and frontend Linux images in parallel and push full-commit-SHA tags to Artifact Registry. A rerun reuses tags that already exist.
 3. Initialize the production GCS Terraform backend and recover the existing write-only database input from Secret Manager.
 4. Save and display a Terraform plan that updates both Cloud Run image references, then apply that exact plan.
-5. Execute the migration job and run the cumulative verifier for the current production phase (`make phase13-verify` after Phase 13).
+5. Execute the migration job and run the cumulative verifier for the current production phase (`make phase14-verify` after Phase 14).
 
 The verifier confirms all three Cloud Run resources use the expected immutable images, the OIDC provider is repository/branch restricted, the deployment account has no user-managed key, Terraform has no remaining drift, and every Phase 11 production check still passes.
 

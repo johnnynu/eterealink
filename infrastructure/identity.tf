@@ -19,6 +19,13 @@ resource "google_service_account" "migrations" {
   description  = "Database-only identity for the Aurea Link migration job"
 }
 
+resource "google_service_account" "cleanup" {
+  project      = var.project_id
+  account_id   = local.cleanup_account_id
+  display_name = "Aurea Link lifecycle cleanup"
+  description  = "Runs and schedules expired anonymous content cleanup"
+}
+
 resource "google_project_iam_custom_role" "signed_url_creator" {
   project     = var.project_id
   role_id     = "aureaLinkSignedURLCreator"
@@ -37,6 +44,14 @@ resource "google_project_iam_custom_role" "object_runtime" {
     "storage.objects.delete",
     "storage.objects.get",
   ]
+}
+
+resource "google_project_iam_custom_role" "object_cleanup" {
+  project     = var.project_id
+  role_id     = "aureaLinkObjectCleanup"
+  title       = "Aurea Link Object Cleanup"
+  description = "Allows the lifecycle job to delete expired application objects."
+  permissions = ["storage.objects.delete"]
 }
 
 resource "google_service_account_iam_member" "api_self_signer" {

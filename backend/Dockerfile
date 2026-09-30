@@ -9,7 +9,8 @@ RUN go mod download
 
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/api \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
+	&& CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate \
+	&& CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/cleanup ./cmd/cleanup
 
 FROM alpine:3.22
 
@@ -21,6 +22,7 @@ WORKDIR /app
 
 COPY --from=build /out/api /app/api
 COPY --from=build /out/migrate /app/migrate
+COPY --from=build /out/cleanup /app/cleanup
 COPY migrations /app/migrations
 
 USER eterealink

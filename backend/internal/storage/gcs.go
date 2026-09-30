@@ -23,6 +23,27 @@ type GCSBackend struct {
 	signBytes      func(context.Context, []byte) ([]byte, error)
 }
 
+type GCSDeleter struct {
+	client     *cloudstorage.Client
+	bucketName string
+}
+
+func NewGCSDeleter(ctx context.Context, bucketName string) (*GCSDeleter, error) {
+	client, err := cloudstorage.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Cloud Storage client: %w", err)
+	}
+	return &GCSDeleter{client: client, bucketName: bucketName}, nil
+}
+
+func (d *GCSDeleter) Close() error {
+	return d.client.Close()
+}
+
+func (d *GCSDeleter) DeleteObject(ctx context.Context, storageKey string) error {
+	return deleteObject(ctx, d.client, d.bucketName, storageKey)
+}
+
 func NewGCSBackend(ctx context.Context, bucketName, signingAccount string) (*GCSBackend, error) {
 	client, err := cloudstorage.NewClient(ctx)
 	if err != nil {
@@ -140,12 +161,16 @@ func (b *GCSBackend) StatObject(ctx context.Context, storageKey string) (ObjectA
 }
 
 func (b *GCSBackend) DeleteObject(ctx context.Context, storageKey string) error {
-	err := b.client.Bucket(b.bucketName).Object(storageKey).Delete(ctx)
+	return deleteObject(ctx, b.client, b.bucketName, storageKey)
+}
+
+func deleteObject(ctx context.Context, client *cloudstorage.Client, bucketName, storageKey string) error {
+	err := client.Bucket(bucketName).Object(storageKey).Delete(ctx)
 	if errors.Is(err, cloudstorage.ErrObjectNotExist) {
 		return ErrObjectNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("delete gs://%s/%s: %w", b.bucketName, storageKey, err)
+		return fmt.Errorf("delete gs://%s/%s: %w", bucketName, storageKey, err)
 	}
 	return nil
 }

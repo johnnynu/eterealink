@@ -6,7 +6,7 @@ The project is designed as both a useful product and a practical demonstration o
 
 ## Project status
 
-Phases 1 through 12—the product foundation, complete public Cloud Run deployment, private database networking, Terraform adoption, production security baseline, and keyless CI/CD—are complete.
+Phases 1 through 14—the product foundation, complete public Cloud Run deployment, private database networking, Terraform adoption, production security baseline, keyless CI/CD, observability, and lifecycle automation—are complete.
 
 Implemented:
 
@@ -61,6 +61,8 @@ Implemented:
 - Pull-request CI for Go formatting/tests, frontend lint/tests/builds, shell syntax, and Terraform formatting/validation
 - Keyless main-branch GitHub deployments through repository- and branch-restricted Workload Identity Federation
 - Parallel immutable API/frontend image builds, Terraform-planned Cloud Run releases, migration execution, and production verification
+- Hourly, retry-safe deletion of expired anonymous objects and cascading metadata through Cloud Scheduler and a dedicated Cloud Run job
+- A separate cleanup identity limited to the pinned database secret, object deletion, and invocation of its own job
 
 ### Per-user storage quotas
 
@@ -188,7 +190,7 @@ An anonymous transfer follows this path:
 5. The browser confirms each file; the API verifies its stored size and media type.
 6. When every file is ready, a background worker streams the objects into a ZIP stored in the existing bucket.
 7. Recipients resolve one short code and can download the ZIP when ready or any file individually.
-8. The transfer and share stop resolving after 24 hours. Physical object deletion remains part of the lifecycle-cleanup phase.
+8. The transfer and share stop resolving after 24 hours. The hourly lifecycle job deletes every recorded file and archive object before cascading its transfer and share metadata.
 
 ## Current API
 
@@ -290,7 +292,7 @@ To complete a browser upload, use the real GCS backend by following the [Phase 2
 
 To enable Google Sign-In, follow the [Phase 4 Firebase setup guide](./docs/setup/firebase-phase4.md). Authentication is optional in local development: when Firebase variables are absent, anonymous transfers continue to work and the sign-in control stays hidden.
 
-Production infrastructure is defined in [`infrastructure`](./infrastructure). Follow the [Phase 10 Terraform guide](./docs/setup/gcp-phase10-terraform.md) to bootstrap or adopt it, the [Phase 11 security guide](./docs/setup/gcp-phase11-security.md) for the least-privilege runtime baseline, the [Phase 12 CI/CD guide](./docs/setup/gcp-phase12-cicd.md) for keyless GitHub deployment setup, and the [Phase 13 observability guide](./docs/setup/gcp-phase13-observability.md) for monitoring and incident response.
+Production infrastructure is defined in [`infrastructure`](./infrastructure). Follow the [Phase 10 Terraform guide](./docs/setup/gcp-phase10-terraform.md) to bootstrap or adopt it, the [Phase 11 security guide](./docs/setup/gcp-phase11-security.md) for the least-privilege runtime baseline, the [Phase 12 CI/CD guide](./docs/setup/gcp-phase12-cicd.md) for keyless GitHub deployment setup, the [Phase 13 observability guide](./docs/setup/gcp-phase13-observability.md) for monitoring and incident response, and the [Phase 14 lifecycle guide](./docs/setup/gcp-phase14-lifecycle.md) for scheduled cleanup.
 
 ## Delivery roadmap
 
@@ -314,18 +316,18 @@ Production infrastructure is defined in [`infrastructure`](./infrastructure). Fo
 | 11. Security hardening ✅ | Least-privilege identities and custom roles, pinned secrets, bounded upload creation, and response security headers |
 | 12. CI/CD ✅ | Pull-request checks and keyless main-branch image build, Terraform deployment, migration, and verification |
 | 13. Observability ✅ | Public uptime checks, actionable availability alerting, an operations dashboard, and trace-correlated structured logs |
-| 14. Lifecycle automation | Expired anonymous object and metadata cleanup |
+| 14. Lifecycle automation ✅ | Hourly, retry-safe expired anonymous object and cascading metadata cleanup |
 
-The product MVP is complete. The cloud portfolio milestone adds repeatable infrastructure, private database networking, automated deployment, security controls, and operational visibility.
+The product MVP and cloud portfolio milestones are complete.
 
 ## Security and cost posture
 
 - Buckets remain private; access is issued through short-lived signed URLs.
 - Firebase tokens establish identity, while the API and PostgreSQL enforce authorization.
 - PostgreSQL uses private Cloud SQL connectivity and has no public database address.
-- Separate runtime and migration identities receive only their exact bucket, signing, or secret permissions; the database secret is pinned to a numeric version.
+- Separate runtime, migration, and cleanup identities receive only their exact bucket, signing, secret, or job permissions; the database secret is pinned to a numeric version.
 - A Terraform-managed uptime check, availability alert, and production dashboard cover the public domain and both Cloud Run services.
 - Cloud Run scales to zero, and always-on load balancers, NAT gateways, and Kubernetes are excluded unless a real requirement justifies them.
-- Anonymous transfers have hard file-size, file-count, signed-URL, and expiration ceilings. Creation is rate-limited per client and per API instance. Physical object cleanup remains in Phase 14.
+- Anonymous transfers have hard file-size, file-count, signed-URL, and expiration ceilings. Creation is rate-limited per client and per API instance, and expired content is removed automatically.
 
 Architecture decisions are recorded under [`docs/architecture`](./docs/architecture/).

@@ -20,4 +20,4 @@ The Go API issues short-lived V4-signed `PUT` and `GET` URLs for a private Cloud
 
 ## Consequences
 
-Cloud Run will handle small control-plane requests while Cloud Storage carries file bandwidth. The runtime identity needs bucket-scoped object access and permission to sign as itself. Local developers need permission to impersonate or invoke signing for that identity. Completion now depends on Cloud Storage availability, and expired abandoned uploads will require the lifecycle cleanup planned for a later phase.
+Cloud Run handles small control-plane requests while Cloud Storage carries file bandwidth. The runtime identity needs bucket-scoped object access and permission to sign as itself. Local developers need permission to impersonate or invoke signing for that identity. Completion depends on Cloud Storage availability, and the Phase 14 lifecycle job removes expired abandoned uploads.

@@ -95,3 +95,10 @@ resource "google_secret_manager_secret_iam_member" "migrations_database_url" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.migrations.email}"
 }
+
+resource "google_secret_manager_secret_iam_member" "cleanup_database_url" {
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.database_url.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cleanup.email}"
+}

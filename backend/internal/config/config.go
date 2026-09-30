@@ -27,6 +27,12 @@ type Config struct {
 	AnonymousUploadRateWindow time.Duration
 }
 
+type CleanupConfig struct {
+	DatabaseURL string
+	GCSBucket   string
+	BatchSize   int
+}
+
 const (
 	maxAnonymousFileTTL          = 24 * time.Hour
 	maxSignedURLTTL              = 15 * time.Minute
@@ -124,6 +130,25 @@ func Load() (Config, error) {
 		AnonymousUploadRateLimit:  rateLimit,
 		AnonymousUploadRateWindow: rateWindow,
 	}, nil
+}
+
+func LoadCleanup() (CleanupConfig, error) {
+	batchSize, err := intValue("CLEANUP_BATCH_SIZE", 100)
+	if err != nil {
+		return CleanupConfig{}, err
+	}
+	if batchSize > 1000 {
+		return CleanupConfig{}, fmt.Errorf("CLEANUP_BATCH_SIZE cannot exceed 1000")
+	}
+	databaseURL := value("DATABASE_URL", "")
+	if databaseURL == "" {
+		return CleanupConfig{}, fmt.Errorf("DATABASE_URL is required")
+	}
+	bucket := value("GCS_BUCKET", "")
+	if bucket == "" {
+		return CleanupConfig{}, fmt.Errorf("GCS_BUCKET is required")
+	}
+	return CleanupConfig{DatabaseURL: databaseURL, GCSBucket: bucket, BatchSize: batchSize}, nil
 }
 
 func intValue(key string, fallback int) (int, error) {

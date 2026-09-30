@@ -2,6 +2,7 @@ locals {
   required_services = toset([
     "artifactregistry.googleapis.com",
     "cloudbuild.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "compute.googleapis.com",
     "firebase.googleapis.com",
     "iamcredentials.googleapis.com",

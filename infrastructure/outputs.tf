@@ -23,6 +23,21 @@ output "migration_service_account" {
   value       = google_service_account.migrations.email
 }
 
+output "cleanup_service_account" {
+  description = "Least-privilege lifecycle cleanup identity."
+  value       = google_service_account.cleanup.email
+}
+
+output "cleanup_job" {
+  description = "Cloud Run job that removes expired anonymous content."
+  value       = google_cloud_run_v2_job.cleanup.name
+}
+
+output "cleanup_schedule" {
+  description = "Hourly Cloud Scheduler trigger for lifecycle cleanup."
+  value       = google_cloud_scheduler_job.cleanup.id
+}
+
 output "domain_dns_records" {
   description = "DNS records reported by the Cloud Run domain mappings."
   value = {

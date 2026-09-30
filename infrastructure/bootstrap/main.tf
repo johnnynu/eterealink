@@ -146,6 +146,33 @@ resource "google_project_iam_member" "deploy_observability" {
   member  = "serviceAccount:${google_service_account.deploy.email}"
 }
 
+resource "google_project_iam_custom_role" "scheduler_deployer" {
+  project     = var.project_id
+  role_id     = "aureaLinkSchedulerDeployer"
+  title       = "Aurea Link Scheduler Deployer"
+  description = "Manages the Aurea Link lifecycle schedule without permission to run arbitrary Scheduler jobs."
+  permissions = [
+    "cloudscheduler.jobs.create",
+    "cloudscheduler.jobs.delete",
+    "cloudscheduler.jobs.enable",
+    "cloudscheduler.jobs.fullView",
+    "cloudscheduler.jobs.get",
+    "cloudscheduler.jobs.list",
+    "cloudscheduler.jobs.pause",
+    "cloudscheduler.jobs.update",
+    "cloudscheduler.locations.get",
+    "cloudscheduler.locations.list",
+  ]
+
+  depends_on = [google_project_service.bootstrap["iam.googleapis.com"]]
+}
+
+resource "google_project_iam_member" "deploy_scheduler" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.scheduler_deployer.id
+  member  = "serviceAccount:${google_service_account.deploy.email}"
+}
+
 resource "google_storage_bucket_iam_member" "deploy_state" {
   bucket = google_storage_bucket.terraform_state.name
   role   = "roles/storage.objectAdmin"

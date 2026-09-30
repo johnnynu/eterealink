@@ -89,7 +89,14 @@ func (w *ArchiveWorker) BuildNext(ctx context.Context) (bool, error) {
 		return true, fmt.Errorf("build archive for transfer %s: %w", transfer.ID, buildErr)
 	}
 	if err := w.store.CompleteArchive(ctx, transfer.ID, attributes.SizeBytes, w.now().UTC()); err != nil {
-		return true, err
+		cleanupErr := w.storage.DeleteObject(context.WithoutCancel(ctx), transfer.ArchiveStorageKey)
+		if errors.Is(cleanupErr, storage.ErrObjectNotFound) {
+			cleanupErr = nil
+		}
+		if cleanupErr != nil {
+			err = errors.Join(err, fmt.Errorf("delete uncommitted archive: %w", cleanupErr))
+		}
+		return true, fmt.Errorf("complete archive for transfer %s: %w", transfer.ID, err)
 	}
 	w.logger.Info("archive ready", "transfer_id", transfer.ID, "files", len(files), "size_bytes", attributes.SizeBytes)
 	return true, nil

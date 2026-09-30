@@ -44,6 +44,22 @@ resource "google_storage_bucket_iam_member" "api_object_runtime" {
   }
 }
 
+resource "google_storage_bucket_iam_member" "cleanup_object_delete" {
+  bucket = google_storage_bucket.files.name
+  role   = google_project_iam_custom_role.object_cleanup.id
+  member = "serviceAccount:${google_service_account.cleanup.email}"
+
+  condition {
+    title       = "Delete expired anonymous objects only"
+    description = "Restricts the lifecycle identity to the anonymous object namespace."
+    expression  = "resource.name.startsWith('projects/_/buckets/${google_storage_bucket.files.name}/objects/anonymous/')"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 moved {
   from = google_storage_bucket_iam_member.api_object_user
   to   = google_storage_bucket_iam_member.api_object_runtime

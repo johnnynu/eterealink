@@ -100,3 +100,36 @@ func TestAnonymousSecurityLimitsRejectUnsafeOverrides(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadCleanup(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("GCS_BUCKET", "files")
+	t.Setenv("CLEANUP_BATCH_SIZE", "250")
+
+	cfg, err := LoadCleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseURL != "postgres://example" || cfg.GCSBucket != "files" || cfg.BatchSize != 250 {
+		t.Fatalf("cleanup config = %#v", cfg)
+	}
+}
+
+func TestLoadCleanupRequiresDependenciesAndBoundsBatch(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("GCS_BUCKET", "")
+	if _, err := LoadCleanup(); err == nil {
+		t.Fatal("LoadCleanup succeeded without DATABASE_URL")
+	}
+
+	t.Setenv("DATABASE_URL", "postgres://example")
+	if _, err := LoadCleanup(); err == nil {
+		t.Fatal("LoadCleanup succeeded without GCS_BUCKET")
+	}
+
+	t.Setenv("GCS_BUCKET", "files")
+	t.Setenv("CLEANUP_BATCH_SIZE", "1001")
+	if _, err := LoadCleanup(); err == nil {
+		t.Fatal("LoadCleanup accepted an unbounded batch")
+	}
+}

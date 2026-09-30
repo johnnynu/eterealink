@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -64,9 +65,32 @@ func TestArchiveWorkerBuildsDownloadAllZIP(t *testing.T) {
 	}
 }
 
+func TestArchiveWorkerDeletesArchiveWhenCompletionCannotCommit(t *testing.T) {
+	now := time.Date(2026, time.September, 3, 8, 0, 0, 0, time.UTC)
+	store := &archiveMemoryStore{
+		transfer: domain.AnonymousTransfer{
+			ID: "expired", Status: domain.TransferStatusReady, ArchiveStatus: domain.ArchiveStatusPending,
+			ArchiveStorageKey: "anonymous/expired/bundle.zip", CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		},
+		files:       []domain.File{{ID: "a", StorageKey: "objects/a", OriginalName: "alpha.txt", CreatedAt: now, Status: domain.FileStatusReady}},
+		completeErr: domain.ErrNotFound,
+	}
+	backend := &archiveMemoryBackend{objects: map[string][]byte{"objects/a": []byte("alpha")}}
+	worker := NewArchiveWorker(store, backend, func() time.Time { return now }, discardLogger())
+
+	worked, err := worker.BuildNext(context.Background())
+	if !worked || !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("worked = %v, error = %v", worked, err)
+	}
+	if _, exists := backend.objects[store.transfer.ArchiveStorageKey]; exists {
+		t.Fatal("archive remained after its metadata could not be committed")
+	}
+}
+
 type archiveMemoryStore struct {
-	transfer domain.AnonymousTransfer
-	files    []domain.File
+	transfer    domain.AnonymousTransfer
+	files       []domain.File
+	completeErr error
 }
 
 func (s *archiveMemoryStore) ClaimPendingArchive(_ context.Context, _ time.Time) (domain.AnonymousTransfer, []domain.File, error) {
@@ -78,6 +102,9 @@ func (s *archiveMemoryStore) ClaimPendingArchive(_ context.Context, _ time.Time)
 }
 
 func (s *archiveMemoryStore) CompleteArchive(_ context.Context, _ string, sizeBytes int64, _ time.Time) error {
+	if s.completeErr != nil {
+		return s.completeErr
+	}
 	s.transfer.ArchiveStatus = domain.ArchiveStatusReady
 	s.transfer.ArchiveSizeBytes = &sizeBytes
 	return nil

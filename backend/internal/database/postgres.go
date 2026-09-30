@@ -49,6 +49,63 @@ func (p *Postgres) Ping(ctx context.Context) error {
 	return nil
 }
 
+func (p *Postgres) ListExpiredAnonymousContent(ctx context.Context, now time.Time, limit int) ([]domain.ExpiredAnonymousContent, error) {
+	rows, err := p.pool.Query(ctx, `
+		WITH expired AS (
+			SELECT 'TRANSFER'::text AS kind, t.id, t.expires_at,
+			       array_prepend(t.archive_storage_key, ARRAY(
+				       SELECT f.storage_key FROM files f WHERE f.transfer_id = t.id ORDER BY f.id
+			       )) AS storage_keys
+			FROM anonymous_transfers t
+			WHERE t.expires_at <= $1
+			UNION ALL
+			SELECT 'FILE'::text, f.id, f.expires_at, ARRAY[f.storage_key]
+			FROM files f
+			WHERE f.owner_id IS NULL AND f.transfer_id IS NULL AND f.expires_at <= $1
+		)
+		SELECT kind, id, expires_at, storage_keys
+		FROM expired
+		ORDER BY expires_at, kind, id
+		LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list expired anonymous content: %w", err)
+	}
+	defer rows.Close()
+	var result []domain.ExpiredAnonymousContent
+	for rows.Next() {
+		var content domain.ExpiredAnonymousContent
+		if err := rows.Scan(&content.Kind, &content.ID, &content.ExpiresAt, &content.StorageKeys); err != nil {
+			return nil, fmt.Errorf("scan expired anonymous content: %w", err)
+		}
+		result = append(result, content)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list expired anonymous content: %w", err)
+	}
+	return result, nil
+}
+
+func (p *Postgres) DeleteExpiredAnonymousContent(ctx context.Context, content domain.ExpiredAnonymousContent, now time.Time) (bool, error) {
+	var (
+		command pgconn.CommandTag
+		err     error
+	)
+	switch content.Kind {
+	case domain.AnonymousCleanupFile:
+		command, err = p.pool.Exec(ctx, `
+			DELETE FROM files
+			WHERE id = $1 AND owner_id IS NULL AND transfer_id IS NULL AND expires_at <= $2`, content.ID, now)
+	case domain.AnonymousCleanupTransfer:
+		command, err = p.pool.Exec(ctx, `DELETE FROM anonymous_transfers WHERE id = $1 AND expires_at <= $2`, content.ID, now)
+	default:
+		return false, fmt.Errorf("unknown anonymous cleanup kind %q", content.Kind)
+	}
+	if err != nil {
+		return false, fmt.Errorf("delete expired %s %s: %w", content.Kind, content.ID, err)
+	}
+	return command.RowsAffected() == 1, nil
+}
+
 func (p *Postgres) ListenFolderEvents(ctx context.Context, publish func(folderID string)) error {
 	return p.listenFolderEvents(ctx, nil, publish)
 }
